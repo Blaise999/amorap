@@ -31,6 +31,12 @@ def init():
  with db() as c:
   for k,v in SEED.items():
    c.execute('INSERT INTO amorap_booking.settings (key,value) VALUES (%s,%s) ON CONFLICT (key) DO NOTHING',(k,json.dumps(v)))
+  marker=c.execute("INSERT INTO amorap_booking.settings (key,value) VALUES ('villa_photo_seed_v2','true') ON CONFLICT (key) DO NOTHING RETURNING key").fetchone()
+  if marker:
+   rows=get(c,'rooms');defaults={r['id']:r['images'] for r in SEED['rooms']}
+   for room in rows:
+    if room['id'] in defaults and not room.get('images'):room['images']=defaults[room['id']].copy()
+   save(c,'rooms',rows)
 
 def get(c,k):return json.loads(c.execute('SELECT value FROM amorap_booking.settings WHERE key=%s',(k,)).fetchone()['value'])
 def save(c,k,v):c.execute('UPDATE amorap_booking.settings SET value=%s WHERE key=%s',(json.dumps(v,ensure_ascii=False),k))
@@ -99,6 +105,7 @@ def validate_rooms(c,rows):
   ids.add(rid);amen=r.get('amenities',[]);imgs=r.get('images',[])
   if not isinstance(amen,list) or len(amen)>40 or not isinstance(imgs,list) or len(imgs)>15:raise APIError('Invalid amenities or photos.')
   for x in imgs:
+   if isinstance(x,str) and x in {im for sr in SEED['rooms'] for im in sr['images']} and (PUBLIC/x.lstrip('/')).is_file():continue
    if not isinstance(x,str) or not re.fullmatch(r'/uploads/[a-f0-9]{32}\.(jpg|png|webp)',x) or not c.execute('SELECT 1 FROM amorap_booking.photos WHERE name=%s',(Path(x).name,)).fetchone():raise APIError('Upload photos using the dashboard.')
   result.append({'id':rid,'name':clean(r.get('name'),120,True),'category':clean(r.get('category',''),100),'description':clean(r.get('description',''),3000),'price':amount(r.get('price')),'capacity':integer(r.get('capacity'),0,100),'inventory':integer(r.get('inventory'),0,1000),'bed':clean(r.get('bed',''),200),'size':clean(r.get('size',''),100),'policy':clean(r.get('policy',''),2000),'amenities':[clean(x,150,True) for x in amen],'images':imgs,'active':r.get('active') is True})
  return result
@@ -114,6 +121,9 @@ def validate_addons(rows):
   if basis not in ('stay','night'):raise APIError('Invalid extra pricing.')
   result.append({'id':rid,'name':clean(r.get('name'),120,True),'description':clean(r.get('description',''),1000),'price':amount(r.get('price')),'basis':basis,'active':r.get('active') is True})
  return result
+
+def fallback_catalog():
+ return {'rooms':[{**r,'bookable':False} for r in SEED['rooms'] if r['active']], 'addons':[], 'paymentReady':False,'fallback':True}
 
 def public_catalog(c):
  return {'rooms':[{**r,'bookable':enabled(r)} for r in get(c,'rooms') if r['active']], 'addons':[r for r in get(c,'addons') if r['active'] and r['price'] is not None], 'paymentReady':payment_ready(get(c,'payment'))}
@@ -178,9 +188,13 @@ class Handler(BaseHTTPRequestHandler):
   except APIError as e:self.respond({'error':str(e)},e.status)
   except (BrokenPipeError,ConnectionResetError):pass
   except psycopg.OperationalError:
-   print('Database connection unavailable.',flush=True);self.respond({'error':'The reservation service is temporarily unavailable. Please try again later.'},503)
+   print('Database connection unavailable.',flush=True)
+   if path=='/api/catalog' and method=='GET':return self.respond(fallback_catalog())
+   self.respond({'error':'The reservation service is temporarily unavailable. Please try again later.'},503)
   except Exception as e:
-   print('Server error:',type(e).__name__,flush=True);self.respond({'error':'An unexpected server error occurred.'},500)
+   print('Server error:',type(e).__name__,flush=True)
+   if path=='/api/catalog' and method=='GET':return self.respond(fallback_catalog())
+   self.respond({'error':'An unexpected server error occurred.'},500)
  def static(self,path):
   if path.startswith('/uploads/'):
    name=path.split('/')[-1]

@@ -34,7 +34,29 @@ ALTER TABLE amorap_booking.photos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE amorap_booking.admin_sessions ENABLE ROW LEVEL SECURITY;
 
 -- Starter content; rerunning will not overwrite saved admin settings.
-INSERT INTO amorap_booking.settings (key,value) VALUES ('rooms', '[{"id": "inland-single", "name": "Inland Villa \u00b7 Single", "category": "Inland Villas", "description": "Nestled among lush, verdant landscapes, AMORAP''s Inland Villas are a sanctuary of unhurried elegance. Secluded yet supremely appointed, each villa invites you to wake to the music of nature and retreat into refined, restorative comfort.", "price": null, "capacity": 0, "inventory": 0, "bed": "", "size": "", "amenities": [], "images": [], "active": true, "policy": ""}, {"id": "inland-double", "name": "Inland Villa \u00b7 Double", "category": "Inland Villas", "description": "Nestled among lush, verdant landscapes, AMORAP''s Inland Villas are a sanctuary of unhurried elegance. Secluded yet supremely appointed, each villa invites you to wake to the music of nature and retreat into refined, restorative comfort.", "price": null, "capacity": 0, "inventory": 0, "bed": "", "size": "", "amenities": [], "images": [], "active": true, "policy": ""}, {"id": "ocean-single", "name": "Ocean Villa \u00b7 Single", "category": "Ocean Villas", "description": "Where the horizon belongs to you. AMORAP''s Ocean Villas are perched at the edge of the extraordinary \u2014 where cerulean waters meet open skies and the gentle rhythm of waves becomes your constant companion. Luxury, intimately aligned with the sea.", "price": null, "capacity": 0, "inventory": 0, "bed": "", "size": "", "amenities": [], "images": [], "active": true, "policy": ""}, {"id": "ocean-double", "name": "Ocean Villa \u00b7 Double", "category": "Ocean Villas", "description": "Where the horizon belongs to you. AMORAP''s Ocean Villas are perched at the edge of the extraordinary \u2014 where cerulean waters meet open skies and the gentle rhythm of waves becomes your constant companion. Luxury, intimately aligned with the sea.", "price": null, "capacity": 0, "inventory": 0, "bed": "", "size": "", "amenities": [], "images": [], "active": true, "policy": ""}]') ON CONFLICT (key) DO NOTHING;
+INSERT INTO amorap_booking.settings (key,value) VALUES ('rooms', '[{"id": "inland-single", "name": "Inland Villa · Single", "category": "Inland Villas", "description": "Nestled among lush, verdant landscapes, AMORAP''s Inland Villas are a sanctuary of unhurried elegance. Secluded yet supremely appointed, each villa invites you to wake to the music of nature and retreat into refined, restorative comfort.", "price": null, "capacity": 0, "inventory": 0, "bed": "", "size": "", "amenities": [], "images": ["/assets/villas/inland-resort.webp"], "active": true, "policy": ""}, {"id": "inland-double", "name": "Inland Villa · Double", "category": "Inland Villas", "description": "Nestled among lush, verdant landscapes, AMORAP''s Inland Villas are a sanctuary of unhurried elegance. Secluded yet supremely appointed, each villa invites you to wake to the music of nature and retreat into refined, restorative comfort.", "price": null, "capacity": 0, "inventory": 0, "bed": "", "size": "", "amenities": [], "images": ["/assets/villas/inland-resort.webp"], "active": true, "policy": ""}, {"id": "ocean-single", "name": "Ocean Villa · Single", "category": "Ocean Villas", "description": "Where the horizon belongs to you. AMORAP''s Ocean Villas are perched at the edge of the extraordinary — where cerulean waters meet open skies and the gentle rhythm of waves becomes your constant companion. Luxury, intimately aligned with the sea.", "price": null, "capacity": 0, "inventory": 0, "bed": "", "size": "", "amenities": [], "images": ["/assets/villas/ocean-resort.webp"], "active": true, "policy": ""}, {"id": "ocean-double", "name": "Ocean Villa · Double", "category": "Ocean Villas", "description": "Where the horizon belongs to you. AMORAP''s Ocean Villas are perched at the edge of the extraordinary — where cerulean waters meet open skies and the gentle rhythm of waves becomes your constant companion. Luxury, intimately aligned with the sea.", "price": null, "capacity": 0, "inventory": 0, "bed": "", "size": "", "amenities": [], "images": ["/assets/villas/ocean-resort.webp"], "active": true, "policy": ""}]') ON CONFLICT (key) DO NOTHING;
 INSERT INTO amorap_booking.settings (key,value) VALUES ('addons', '[]') ON CONFLICT (key) DO NOTHING;
 INSERT INTO amorap_booking.settings (key,value) VALUES ('payment', '{"bank": "", "name": "", "number": "", "instructions": ""}') ON CONFLICT (key) DO NOTHING;
+COMMIT;
+
+-- Apply once to existing AMORAP installs. No other schema or room fields are modified.
+BEGIN;
+SELECT pg_advisory_xact_lock(1095585618, 20261117);
+WITH claimed AS (
+ INSERT INTO amorap_booking.settings(key,value) VALUES ('villa_photo_seed_v2','true')
+ ON CONFLICT (key) DO NOTHING RETURNING key
+), defaults(id,photo) AS (VALUES
+('inland-single','/assets/villas/inland-resort.webp'),
+('inland-double','/assets/villas/inland-resort.webp'),
+('ocean-single','/assets/villas/ocean-resort.webp'),
+('ocean-double','/assets/villas/ocean-resort.webp')), restored AS (
+ SELECT jsonb_agg(CASE WHEN d.id IS NOT NULL AND COALESCE(r.room->'images','[]'::jsonb) = '[]'::jsonb
+                      THEN jsonb_set(r.room,'{images}',jsonb_build_array(d.photo),true)
+                      ELSE r.room END ORDER BY r.ord) AS catalog
+ FROM amorap_booking.settings s CROSS JOIN LATERAL jsonb_array_elements(s.value::jsonb) WITH ORDINALITY AS r(room,ord)
+ LEFT JOIN defaults d ON d.id=r.room->>'id'
+ WHERE s.key='rooms'
+)
+UPDATE amorap_booking.settings SET value=restored.catalog::text FROM restored
+WHERE key='rooms' AND restored.catalog IS NOT NULL AND EXISTS(SELECT 1 FROM claimed);
 COMMIT;
