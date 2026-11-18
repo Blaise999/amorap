@@ -11,7 +11,7 @@ python -m pip install -r requirements.txt
 python server.py --preview
 ```
 
-Open http://127.0.0.1:8000/. Preview serves the existing content and starter villa catalog; it deliberately disables reservation creation, payment, contact submission and admin actions. Stop it with Ctrl+C before starting the connected version. No demo funds, room rates or fake reservations are used in the delivered site.
+Open http://127.0.0.1:8000/. Preview serves the existing content and starter villa catalog; it deliberately disables reservation creation, payment, contact submission and admin actions. Stop it with Ctrl+C before starting the connected version. Illustrative starter rates are displayed; no demo funds or fake reservations are created.
 
 ## 2. Connect your existing Supabase project
 
@@ -36,7 +36,7 @@ The server reports connection and setup problems without printing your password.
 
 Go to http://127.0.0.1:8000/admin/ and sign in with the credentials you chose.
 
-- **Villas:** set the real nightly rate (PHP), inventory, capacity, name, category, photos, bed, size, amenities, description, policy and visibility for each villa. Save all villas. Add or remove room types as needed. The four supplied room categories have no verified pricing or inventory; these must be entered before they can accept reservations.
+- **Villas:** set the real nightly rate (PHP), inventory, capacity, name, category, photos, bed, size, amenities, description, policy and visibility for each villa. Save all villas. Add or remove room types as needed. The four supplied room variants have example rates, capacity and inventory. Verify each villa, check its review checkbox and save before it can accept reservations.
 - **Extras:** add the approved meals, activities or other add-ons, pricing per stay or night, and visibility. Save.
 - **Bank transfer:** enter the verified resort-authorized bank, account holder, account number and payment instructions. Save. Guests receive the details after creating a reservation. Updated details apply only to new bookings.
 - **Reservations:** review submissions and payment references; only confirm a reservation after independent verification of the transfer in the authorized resort bank account. Cancellation releases the held inventory.
@@ -87,3 +87,7 @@ All 10 page URLs and runtime assets returned HTTP 200 in a local server test. Lo
 - Villa content is rendered immediately from a built-in catalog, then replaced with the live admin-saved catalog when the API responds. If offline, the original starter content remains visible with booking disabled: no fake availability or payment.
 - The original ZIP has the two villa descriptions and Single/Double labels, but its old site fetched exact room photos, rates, inventory and other details from a database that was not supplied. Included category photos are the resort grounds capture and an ocean-villa exterior frame extracted from the supplied hero video, explicitly labeled as resort setting, not verified individual room photographs. Replace with the exact room photos in the dashboard when available.
 - Keep the Supabase database URL private. A static-only host cannot run the Python booking API. Use the Python server for live edits and reservations.
+
+## Starter pricing update
+
+Example nightly rates: Inland Single PHP 4,500; Inland Double PHP 6,500; Ocean Single PHP 7,500; Ocean Double PHP 9,500. All amounts in the database are integer centavos. Example capacities are 2/4 and inventory is one per villa type. All example villas require explicit admin verification before booking. Sample extras are disabled. Existing non-null rates and existing nonempty extras are retained, and bank details and reservations are never changed. `starter_catalog_upgrade.sql` runs once automatically on server startup (or run it manually in Supabase SQL Editor after initial setup). Keep the `.env` and `.git` in your existing project.

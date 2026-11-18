@@ -5,9 +5,9 @@
       "name": "Inland Villa · Single",
       "category": "Inland Villas",
       "description": "Nestled among lush, verdant landscapes, AMORAP's Inland Villas are a sanctuary of unhurried elegance. Secluded yet supremely appointed, each villa invites you to wake to the music of nature and retreat into refined, restorative comfort.",
-      "price": null,
-      "capacity": 0,
-      "inventory": 0,
+      "price": 450000,
+      "capacity": 2,
+      "inventory": 1,
       "bed": "",
       "size": "",
       "amenities": [],
@@ -15,16 +15,17 @@
         "/assets/villas/inland-resort.webp"
       ],
       "active": true,
-      "policy": ""
+      "policy": "",
+      "reviewed": false
     },
     {
       "id": "inland-double",
       "name": "Inland Villa · Double",
       "category": "Inland Villas",
       "description": "Nestled among lush, verdant landscapes, AMORAP's Inland Villas are a sanctuary of unhurried elegance. Secluded yet supremely appointed, each villa invites you to wake to the music of nature and retreat into refined, restorative comfort.",
-      "price": null,
-      "capacity": 0,
-      "inventory": 0,
+      "price": 650000,
+      "capacity": 4,
+      "inventory": 1,
       "bed": "",
       "size": "",
       "amenities": [],
@@ -32,16 +33,17 @@
         "/assets/villas/inland-resort.webp"
       ],
       "active": true,
-      "policy": ""
+      "policy": "",
+      "reviewed": false
     },
     {
       "id": "ocean-single",
       "name": "Ocean Villa · Single",
       "category": "Ocean Villas",
       "description": "Where the horizon belongs to you. AMORAP's Ocean Villas are perched at the edge of the extraordinary — where cerulean waters meet open skies and the gentle rhythm of waves becomes your constant companion. Luxury, intimately aligned with the sea.",
-      "price": null,
-      "capacity": 0,
-      "inventory": 0,
+      "price": 750000,
+      "capacity": 2,
+      "inventory": 1,
       "bed": "",
       "size": "",
       "amenities": [],
@@ -49,16 +51,17 @@
         "/assets/villas/ocean-resort.webp"
       ],
       "active": true,
-      "policy": ""
+      "policy": "",
+      "reviewed": false
     },
     {
       "id": "ocean-double",
       "name": "Ocean Villa · Double",
       "category": "Ocean Villas",
       "description": "Where the horizon belongs to you. AMORAP's Ocean Villas are perched at the edge of the extraordinary — where cerulean waters meet open skies and the gentle rhythm of waves becomes your constant companion. Luxury, intimately aligned with the sea.",
-      "price": null,
-      "capacity": 0,
-      "inventory": 0,
+      "price": 950000,
+      "capacity": 4,
+      "inventory": 1,
       "bed": "",
       "size": "",
       "amenities": [],
@@ -66,10 +69,36 @@
         "/assets/villas/ocean-resort.webp"
       ],
       "active": true,
-      "policy": ""
+      "policy": "",
+      "reviewed": false
     }
   ],
-  "addons": [],
+  "addons": [
+    {
+      "id": "starter-breakfast",
+      "name": "Breakfast",
+      "description": "Example extra — confirm service and inclusions before enabling.",
+      "price": 45000,
+      "basis": "night",
+      "active": false
+    },
+    {
+      "id": "starter-airport-transfer",
+      "name": "Airport transfer",
+      "description": "Example extra — confirm route and availability before enabling.",
+      "price": 150000,
+      "basis": "stay",
+      "active": false
+    },
+    {
+      "id": "starter-room-decoration",
+      "name": "Room decoration",
+      "description": "Example extra — confirm package before enabling.",
+      "price": 120000,
+      "basis": "stay",
+      "active": false
+    }
+  ],
   "payment": {
     "bank": "",
     "name": "",

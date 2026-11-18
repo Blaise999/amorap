@@ -37,6 +37,10 @@ def init():
    for room in rows:
     if room['id'] in defaults and not room.get('images'):room['images']=defaults[room['id']].copy()
    save(c,'rooms',rows)
+  # Apply the same one-time migration used in Supabase SQL Editor.
+  migration=(ROOT/'starter_catalog_upgrade.sql').read_text(encoding='utf-8')
+  body=migration.split('BEGIN;',1)[1].rsplit('COMMIT;',1)[0]
+  c.execute(body)
 
 def get(c,k):return json.loads(c.execute('SELECT value FROM amorap_booking.settings WHERE key=%s',(k,)).fetchone()['value'])
 def save(c,k,v):c.execute('UPDATE amorap_booking.settings SET value=%s WHERE key=%s',(json.dumps(v,ensure_ascii=False),k))
@@ -59,7 +63,7 @@ def ident(v):
  if not re.fullmatch('[a-zA-Z0-9_-]+',v):raise APIError('Invalid identifier.')
  return v
 
-def enabled(r):return (r.get('active',False) and r['price'] is not None and r['price']>0 and r['capacity']>0 and r['inventory']>0)
+def enabled(r):return (r.get('active',False) and r.get('reviewed',True) and r['price'] is not None and r['price']>0 and r['capacity']>0 and r['inventory']>0)
 def payment_ready(p):return all(p.get(k) for k in ('bank','name','number'))
 def today():return datetime.now(timezone(timedelta(hours=8))).date()
 def dates(a,b):
@@ -107,7 +111,7 @@ def validate_rooms(c,rows):
   for x in imgs:
    if isinstance(x,str) and x in {im for sr in SEED['rooms'] for im in sr['images']} and (PUBLIC/x.lstrip('/')).is_file():continue
    if not isinstance(x,str) or not re.fullmatch(r'/uploads/[a-f0-9]{32}\.(jpg|png|webp)',x) or not c.execute('SELECT 1 FROM amorap_booking.photos WHERE name=%s',(Path(x).name,)).fetchone():raise APIError('Upload photos using the dashboard.')
-  result.append({'id':rid,'name':clean(r.get('name'),120,True),'category':clean(r.get('category',''),100),'description':clean(r.get('description',''),3000),'price':amount(r.get('price')),'capacity':integer(r.get('capacity'),0,100),'inventory':integer(r.get('inventory'),0,1000),'bed':clean(r.get('bed',''),200),'size':clean(r.get('size',''),100),'policy':clean(r.get('policy',''),2000),'amenities':[clean(x,150,True) for x in amen],'images':imgs,'active':r.get('active') is True})
+  result.append({'id':rid,'name':clean(r.get('name'),120,True),'category':clean(r.get('category',''),100),'description':clean(r.get('description',''),3000),'price':amount(r.get('price')),'capacity':integer(r.get('capacity'),0,100),'inventory':integer(r.get('inventory'),0,1000),'bed':clean(r.get('bed',''),200),'size':clean(r.get('size',''),100),'policy':clean(r.get('policy',''),2000),'amenities':[clean(x,150,True) for x in amen],'images':imgs,'active':r.get('active') is True,'reviewed':r.get('reviewed',True) is True})
  return result
 
 def validate_addons(rows):
