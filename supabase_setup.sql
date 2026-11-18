@@ -91,3 +91,6 @@ UPDATE amorap_booking.settings SET value='[{"id": "starter-breakfast", "name": "
 WHERE key='addons' AND value::jsonb='[]'::jsonb AND EXISTS(SELECT 1 FROM amorap_starter_claim);
 DROP TABLE amorap_starter_claim;
 COMMIT;
+
+-- Editable event/dining catalog; safe to rerun.
+INSERT INTO amorap_booking.settings(key,value) VALUES ('services','[{"id": "event-occasion", "name": "Private celebrations & events", "kind": "event", "description": "Plan a wedding, birthday, corporate gathering or other special occasion at AMORAP. Package and venue details are subject to resort confirmation.", "price": 2500000, "capacity": 50, "active": true, "reviewed": false}, {"id": "dining-cafe", "name": "Café Lounge", "kind": "dining", "description": "Inside the Welcome Center Lobby.", "price": 38000, "capacity": 20, "active": true, "reviewed": false}, {"id": "dining-welcome", "name": "Welcome Center", "kind": "dining", "description": "Inside the Welcome Center Lobby.", "price": 38000, "capacity": 20, "active": true, "reviewed": false}, {"id": "dining-garden", "name": "Sunken Garden", "kind": "dining", "description": "Outside the Pavilion.", "price": 38000, "capacity": 20, "active": true, "reviewed": false}]') ON CONFLICT (key) DO NOTHING;

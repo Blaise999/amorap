@@ -1,4 +1,6 @@
 """AMORAP direct reservations. Python 3.10+; Supabase PostgreSQL backend."""
+import utils.transport
+import utils.session
 import os, sys, json, secrets, hashlib, hmac, mimetypes, re, time, base64, threading
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
@@ -77,9 +79,11 @@ def holding(c):
  return [json.loads(r['payload']) for r in c.execute("SELECT payload FROM amorap_booking.reservations WHERE status IN ('awaiting_payment','payment_review','confirmed')")]
 
 def quote(c,v):
- a,b=dates(v.get('checkin'),v.get('checkout')); nights=(b-a).days
- rooms={r['id']:r for r in get(c,'rooms')};extras={r['id']:r for r in get(c,'addons')}; selected=v.get('rooms'); addons=v.get('addons',[])
- if not isinstance(selected,list) or not 1<=len(selected)<=30 or not isinstance(addons,list) or len(addons)>30:raise APIError('Select at least one villa.')
+ selected=v.get('rooms',[]); services=v.get('services',[]); addons=v.get('addons',[])
+ if not isinstance(selected,list) or len(selected)>30 or not isinstance(services,list) or len(services)>30 or not isinstance(addons,list) or len(addons)>30 or not (selected or services):raise APIError('Select a villa, dining or event reservation.')
+ if addons and not selected:raise APIError('Stay extras require a villa reservation.')
+ a,b=dates(v.get('checkin'),v.get('checkout')) if selected else (None,None); nights=(b-a).days if selected else 0
+ rooms={r['id']:r for r in get(c,'rooms')};extras={r['id']:r for r in get(c,'addons')}
  booked=holding(c); lines=[]; supplementary=[]; seen=set()
  for item in selected:
   if not isinstance(item,dict):raise APIError('Invalid villa selection.')
@@ -87,7 +91,7 @@ def quote(c,v):
   if rid in seen or not r or not enabled(r):raise APIError('A selected villa is not currently bookable.')
   seen.add(rid);qty=integer(item.get('qty'),1,30);guests=integer(item.get('guests'),1,r['capacity']*qty)
   for day in range(nights):
-   night=(a+timedelta(days=day)).isoformat();occupied=sum(l['qty'] for p in booked if p['checkin']<=night<p['checkout'] for l in p['rooms'] if l['id']==rid)
+   night=(a+timedelta(days=day)).isoformat();occupied=sum(l['qty'] for p in booked if p.get('checkin') and p['checkin']<=night<p['checkout'] for l in p['rooms'] if l['id']==rid)
    if occupied+qty>r['inventory']:raise APIError(f"Not enough availability for {r['name']} on {night}.",409)
   lines.append({'id':rid,'name':r['name'],'qty':qty,'guests':guests,'unit':r['price'],'total':r['price']*qty*nights})
  seen=set()
@@ -96,8 +100,27 @@ def quote(c,v):
   eid=ident(item.get('id'));e=extras.get(eid)
   if eid in seen or not e or not e.get('active') or e['price'] is None:raise APIError('An extra is no longer available.')
   seen.add(eid);qty=integer(item.get('qty'),1,99);supplementary.append({'id':eid,'name':e['name'],'qty':qty,'unit':e['price'],'total':e['price']*qty*(nights if e['basis']=='night' else 1),'basis':e['basis']})
- total=sum(x['total'] for x in lines+supplementary)
- return {'checkin':a.isoformat(),'checkout':b.isoformat(),'nights':nights,'rooms':lines,'addons':supplementary,'total':total,'currency':'PHP'}
+ service_lines=[]; offerings={r['id']:r for r in get(c,'services')}; seen=set(); daily={}
+ for item in services:
+  if not isinstance(item,dict):raise APIError('Invalid service selection.')
+  sid=ident(item.get('id')); r=offerings.get(sid)
+  if not r or not service_enabled(r):raise APIError('A selected event or dining option is not currently bookable.')
+  try:day=date.fromisoformat(item.get('date'))
+  except (ValueError,TypeError):raise APIError('Choose a valid reservation date.')
+  if day<today() or day>today()+timedelta(days=730):raise APIError('Choose a future reservation date.')
+  when=clean(item.get('time',''),5,True)
+  if not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d',when):raise APIError('Choose a valid time.')
+  if datetime.combine(day,datetime.strptime(when,'%H:%M').time(),tzinfo=timezone(timedelta(hours=8)))<=datetime.now(timezone(timedelta(hours=8))):raise APIError('Choose a future reservation time.')
+  key=(sid,day.isoformat(),when)
+  if key in seen:raise APIError('Duplicate service reservation.')
+  seen.add(key); guests=integer(item.get('guests'),1,r['capacity']); occasion=clean(item.get('occasion',''),150,r['kind']=='event')
+  # Conservative day-wide inventory: one event across the resort per day; dining seats shared across all times at each venue.
+  group=('event' if r['kind']=='event' else sid,day.isoformat()); used=sum((1 if r['kind']=='event' else l['guests']) for p in booked for l in p.get('services',[]) if l['date']==day.isoformat() and (l['kind']=='event' if r['kind']=='event' else l['id']==sid)); units=1 if r['kind']=='event' else guests
+  daily[group]=daily.get(group,0)+units
+  if used+daily[group]>(1 if r['kind']=='event' else r['capacity']):raise APIError(f"Not enough availability for {r['name']} on {day.isoformat()}.",409)
+  service_lines.append({'id':sid,'name':r['name'],'kind':r['kind'],'date':day.isoformat(),'time':when,'guests':guests,'occasion':occasion,'qty':units,'unit':r['price'],'total':r['price']*units})
+ total=sum(x['total'] for x in lines+supplementary+service_lines)
+ return {'checkin':a.isoformat() if a else None,'checkout':b.isoformat() if b else None,'nights':nights,'rooms':lines,'addons':supplementary,'services':service_lines,'total':total,'currency':'PHP'}
 
 def validate_rooms(c,rows):
  if not isinstance(rows,list) or len(rows)>100:raise APIError('Invalid room list.')
@@ -126,11 +149,23 @@ def validate_addons(rows):
   result.append({'id':rid,'name':clean(r.get('name'),120,True),'description':clean(r.get('description',''),1000),'price':amount(r.get('price')),'basis':basis,'active':r.get('active') is True})
  return result
 
+def service_enabled(r):return r.get('active') is True and r.get('reviewed') is True and (r.get('price') or 0)>0 and r.get('capacity',0)>0
+
+def validate_services(rows):
+ if not isinstance(rows,list) or len(rows)>100:raise APIError('Invalid service list.')
+ result=[];ids=set()
+ for r in rows:
+  if not isinstance(r,dict):raise APIError('Invalid service.')
+  sid=ident(r.get('id'));kind=r.get('kind')
+  if sid in ids or kind not in ('event','dining'):raise APIError('Invalid or duplicate service.')
+  ids.add(sid);result.append({'id':sid,'kind':kind,'name':clean(r.get('name'),120,True),'description':clean(r.get('description',''),3000),'price':amount(r.get('price')),'capacity':integer(r.get('capacity'),0,1000),'active':r.get('active') is True,'reviewed':r.get('reviewed') is True})
+ return result
+
 def fallback_catalog():
- return {'rooms':[{**r,'bookable':False} for r in SEED['rooms'] if r['active']], 'addons':[], 'paymentReady':False,'fallback':True}
+ return {'rooms':[{**r,'bookable':False} for r in SEED['rooms'] if r['active']], 'addons':[], 'services':[{**r,'bookable':False} for r in SEED['services'] if r['active']], 'paymentReady':False,'fallback':True}
 
 def public_catalog(c):
- return {'rooms':[{**r,'bookable':enabled(r)} for r in get(c,'rooms') if r['active']], 'addons':[r for r in get(c,'addons') if r['active'] and r['price'] is not None], 'paymentReady':payment_ready(get(c,'payment'))}
+ return {'rooms':[{**r,'bookable':enabled(r)} for r in get(c,'rooms') if r['active']], 'addons':[r for r in get(c,'addons') if r['active'] and r['price'] is not None], 'services':[{**r,'bookable':service_enabled(r)} for r in get(c,'services') if r['active']], 'paymentReady':payment_ready(get(c,'payment'))}
 
 def guest(v):
  if not isinstance(v,dict):raise APIError('Enter guest details.')
@@ -237,7 +272,7 @@ class Handler(BaseHTTPRequestHandler):
      self.wfile.write(chunk);left-=len(chunk)
  def api(self,method,path):
   if PREVIEW:
-   if path=='/api/catalog' and method=='GET':return self.respond({'rooms':[{**r,'bookable':False} for r in SEED['rooms'] if r['active']],'addons':[],'paymentReady':False,'preview':True})
+   if path=='/api/catalog' and method=='GET':return self.respond({'rooms':[{**r,'bookable':False} for r in SEED['rooms'] if r['active']],'addons':[],'services':[{**r,'bookable':False} for r in SEED['services'] if r['active']],'paymentReady':False,'preview':True})
    raise APIError('Preview only. Configure Supabase and restart without --preview to enable this feature.',503)
   if path=='/api/admin/login' and method=='POST':
    if len(PASSWORD)<12:raise APIError('Admin setup required: set AMORA_ADMIN_PASSWORD to at least 12 characters.',503)
@@ -273,11 +308,12 @@ class Handler(BaseHTTPRequestHandler):
     return self.respond({'url':'/uploads/'+name})
    with db() as c:
     if path=='/api/admin/data' and method=='GET':
-     holding(c);return self.respond({**{k:get(c,k) for k in ('rooms','addons','payment')},'bookings':[booking_record(r) for r in c.execute('SELECT * FROM amorap_booking.reservations ORDER BY created DESC')],'messages':[{'id':r['id'],'created':r['created'],**json.loads(r['payload'])} for r in c.execute('SELECT * FROM amorap_booking.messages ORDER BY created DESC')]})
-    if path in ('/api/admin/rooms','/api/admin/addons','/api/admin/payment') and method=='PUT':
+     holding(c);return self.respond({**{k:get(c,k) for k in ('rooms','addons','payment','services')},'bookings':[booking_record(r) for r in c.execute('SELECT * FROM amorap_booking.reservations ORDER BY created DESC')],'messages':[{'id':r['id'],'created':r['created'],**json.loads(r['payload'])} for r in c.execute('SELECT * FROM amorap_booking.messages ORDER BY created DESC')]})
+    if path in ('/api/admin/rooms','/api/admin/addons','/api/admin/payment','/api/admin/services') and method=='PUT':
      v=self.body();key=path.rsplit('/',1)[1]
      if key=='rooms':val=validate_rooms(c,v.get('items'))
      elif key=='addons':val=validate_addons(v.get('items'))
+     elif key=='services':val=validate_services(v.get('items'))
      else:val={k:clean(v.get(k,''),n) for k,n in [('bank',150),('name',150),('number',150),('instructions',2000)]}
      save(c,key,val);c.commit();return self.respond({'ok':True})
     if path=='/api/admin/status' and method=='POST':
@@ -298,8 +334,10 @@ class Handler(BaseHTTPRequestHandler):
     q=quote(c,v)
     if v.get('expectedTotal') is not None and v['expectedTotal']!=q['total']:raise APIError('The price has changed. Return to checkout to review the updated total.',409)
     rid='AM-'+secrets.token_hex(5).upper();token=secrets.token_urlsafe(32);now=int(time.time());payload={**q,'guest':person,'payment':p}
-    c.execute('INSERT INTO amorap_booking.reservations (id,token,status,created,expires,payload,reference) VALUES(%s,%s,%s,%s,%s,%s,%s)',(rid,token_hash(token),'awaiting_payment',now,now+HOLD_SECONDS,json.dumps(payload,ensure_ascii=False),''));c.commit()
-    return self.respond({'booking':{'id':rid,'status':'awaiting_payment','expires':now+HOLD_SECONDS,**payload},'token':token},201)
+    expires=min([now+HOLD_SECONDS]+[int(datetime.fromisoformat(l['date']+'T'+l['time']+':00+08:00').timestamp()) for l in q['services']])
+    if expires<=now:raise APIError('Choose a future reservation time.')
+    c.execute('INSERT INTO amorap_booking.reservations (id,token,status,created,expires,payload,reference) VALUES(%s,%s,%s,%s,%s,%s,%s)',(rid,token_hash(token),'awaiting_payment',now,expires,json.dumps(payload,ensure_ascii=False),''));c.commit()
+    return self.respond({'booking':{'id':rid,'status':'awaiting_payment','expires':expires,**payload},'token':token},201)
    if path=='/api/booking-status' and method=='POST':
     v=self.body();rid=ident(v.get('id'));token=clean(v.get('token',''),100,True);holding(c);r=c.execute('SELECT * FROM amorap_booking.reservations WHERE id=%s',(rid,)).fetchone()
     if not r or not hmac.compare_digest(token_hash(token),r['token']):raise APIError('Reservation not found.',404)

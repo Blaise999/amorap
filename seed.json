@@ -104,5 +104,47 @@
     "name": "",
     "number": "",
     "instructions": ""
-  }
+  },
+  "services": [
+    {
+      "id": "event-occasion",
+      "name": "Private celebrations & events",
+      "kind": "event",
+      "description": "Plan a wedding, birthday, corporate gathering or other special occasion at AMORAP. Package and venue details are subject to resort confirmation.",
+      "price": 2500000,
+      "capacity": 50,
+      "active": true,
+      "reviewed": false
+    },
+    {
+      "id": "dining-cafe",
+      "name": "Café Lounge",
+      "kind": "dining",
+      "description": "Inside the Welcome Center Lobby.",
+      "price": 38000,
+      "capacity": 20,
+      "active": true,
+      "reviewed": false
+    },
+    {
+      "id": "dining-welcome",
+      "name": "Welcome Center",
+      "kind": "dining",
+      "description": "Inside the Welcome Center Lobby.",
+      "price": 38000,
+      "capacity": 20,
+      "active": true,
+      "reviewed": false
+    },
+    {
+      "id": "dining-garden",
+      "name": "Sunken Garden",
+      "kind": "dining",
+      "description": "Outside the Pavilion.",
+      "price": 38000,
+      "capacity": 20,
+      "active": true,
+      "reviewed": false
+    }
+  ]
 }
