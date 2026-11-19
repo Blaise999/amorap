@@ -40,7 +40,7 @@ Go to http://127.0.0.1:8000/admin/ and sign in with the credentials you chose.
 - **Extras:** add the approved meals, activities or other add-ons, pricing per stay or night, and visibility. Save.
 - **Bank transfer:** enter the verified resort-authorized bank, account holder, account number and payment instructions. Save. Guests receive the details after creating a reservation. Updated details apply only to new bookings.
 - **Reservations:** review submissions and payment references; only confirm a reservation after independent verification of the transfer in the authorized resort bank account. Cancellation releases the held inventory.
-- **Messages:** view contact, event, dining and careers inquiries. No external messaging/email provider is configured.
+- **Messages:** view messages from the contact and careers forms. No external messaging/email provider is configured.
 
 ## 4. Connected pages
 
@@ -48,8 +48,8 @@ Go to http://127.0.0.1:8000/admin/ and sign in with the credentials you chose.
 |---|---|
 | `/` | Home, supplied hero video, immediate booking modal |
 | `/villas/` | Live admin-managed villa catalog |
-| `/restaurant/` | Restaurant information and internal dining inquiry |
-| `/events/` | Event information and internal event inquiry |
+| `/restaurant/` | Restaurant information and direct dining reservations |
+| `/events/` | Event information and direct event reservations |
 | `/contact/` | Contact and topic-prefilled inquiry form |
 | `/about/` | Park overview, links to villas, dining and events |
 | `/careers/` | Internal careers inquiry; no invented vacancies |
@@ -84,7 +84,7 @@ All 10 page URLs and runtime assets returned HTTP 200 in a local server test. Lo
 
 - Replace the old project files with this version, keeping your real `.env` locally. The schema stays `amorap_booking`.
 - On startup, a one-time migration adds bundled resort imagery to the four original room IDs only if they have no photos. Existing rates, descriptions, reservations, bank details and other edits are preserved. The same migration is available as `villa_catalog_upgrade.sql`; running it again is harmless. If you have never run the initial SQL, run `supabase_setup.sql` instead.
-- Villa content is rendered immediately from a built-in catalog, then replaced with the live admin-saved catalog when the API responds. If offline, the original starter content remains visible with booking disabled: no fake availability or payment.
+- Villa content is rendered immediately from a built-in catalog, then replaced with the live admin-saved catalog when the API responds. If offline, the original starter content remains visible and guests can build draft carts only: no fake availability or payment.
 - The original ZIP has the two villa descriptions and Single/Double labels, but its old site fetched exact room photos, rates, inventory and other details from a database that was not supplied. Included category photos are the resort grounds capture and an ocean-villa exterior frame extracted from the supplied hero video, explicitly labeled as resort setting, not verified individual room photographs. Replace with the exact room photos in the dashboard when available.
 - Keep the Supabase database URL private. A static-only host cannot run the Python booking API. Use the Python server for live edits and reservations.
 
@@ -99,3 +99,12 @@ Villas (Single/Double), dining and event packages now use the same reservation c
 The Events & dining tab in admin includes starter rates and capacities (private event package PHP 25,000, maximum 50 guests; each dining venue PHP 380/person, daily capacity 20). These capacities and event rates are examples, not confirmed facts. The admin must review the packages, operating hours, prices, capacities and bank details before enabling live bookings. The model reserves one event across the resort per date, and a conservative shared daily seat capacity for each dining venue; requested times are confirmed by staff. Room availability is still checked per night. Assumed prices and unverified options support draft carts and estimates only: the server will not accept a reservation until the selected products are verified. No payment is requested during offline preview.
 
 Tests: backend quote/validation unit tests with in-memory settings and reservation records; Chromium offline DOM tests with mock catalog for villa selection, event/dining forms and mixed cart; Python/JS syntax and internal file links. The environment prevented browser navigation to localhost; the actual hosted site and Supabase connection were not tested.
+
+
+## Admin reliability and QA update — 2026-11-19
+
+Apply the patch over the existing project root (the folder containing `server.py`). Keep `.env`, `.git`, the existing schema and customer records. Restart/redeploy the Python backend and public files together because the admin now expects revision-aware save responses. No migration or database reset is required if the original schema was already installed. Sign in once after deployment: the session cookie has a new AMORAP-specific name and is scoped to `/api/admin/`. Sessions last 24 hours and still expire server-side. Use one canonical HTTPS hostname in production, set `AMORA_SECURE_COOKIE=1`, and configure your reverse proxy to forward the original public Host header. For localhost HTTP only, leave the secure-cookie setting at 0. Never mix local and hosted URLs when testing session continuity.
+
+A database/API outage no longer sends the administrator back to login. The dashboard provides a retry action; unsaved edits are kept in the open page, including when a genuine expiry requires signing in again. Do not close/reload the page with unsaved changes. Concurrent save requests are blocked in the UI, and obsolete revisions are rejected rather than overwriting another editor's newer data. Saving settings updates the public catalog on the next catalog load, not a push to already-open pages. Bank fields can be cleared together to pause new payments; existing reservations retain the account details that were recorded when they were created. Actual transfers still require independent staff verification.
+
+Run the isolated QA suite with `python tests/qa_admin.py`. It uses a disposable SQLite test adapter, not the real Supabase database. Optional offline Chromium DOM tests: install Playwright and Chromium locally, point `QA_CHROMIUM` to the Chromium executable and run `python tests/qa_admin.py --browser`. The test harness replaces browser fetch with a bridge to the real local Python HTTP handlers and emulates cookie transport because browser navigation was blocked in this environment. See `QA_REPORT.md` for results and hosted-site acceptance checks.

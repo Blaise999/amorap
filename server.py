@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, unquote
-from http.cookies import SimpleCookie
+from http.cookies import SimpleCookie, CookieError
 import psycopg
 from psycopg.rows import dict_row
 from dotenv import load_dotenv
@@ -15,17 +15,20 @@ ROOT=Path(__file__).resolve().parent; PUBLIC=ROOT/'public'
 load_dotenv(ROOT/'.env')
 DATABASE_URL=os.environ.get('AMORAP_DATABASE_URL',''); USER=os.environ.get('AMORA_ADMIN_USER','admin'); PASSWORD=os.environ.get('AMORA_ADMIN_PASSWORD',''); SECURE=os.environ.get('AMORA_SECURE_COOKIE','0')=='1'
 ATTEMPTS={}; LOCK=threading.Lock(); HOLD_SECONDS=24*3600
+SESSION_SECONDS=24*3600
+SESSION_COOKIE="amorap_admin_v2"
 PREVIEW='--preview' in sys.argv
 SEED=json.loads((ROOT/'seed.json').read_text(encoding='utf-8'))
 class APIError(Exception):
  def __init__(self,message,status=400): super().__init__(message);self.status=status
 
-def db():
+def db(lock=True):
  if PREVIEW:raise APIError('Preview only. Connect Supabase to enable bookings, contact messages and admin.',503)
  if not DATABASE_URL or any(x in DATABASE_URL for x in ('xxxxx','PROJECT_REF','YOUR_POOLER_HOST','YOUR_ENCODED_PASSWORD','[YOUR-PASSWORD]')):raise RuntimeError('Set the real Supabase Session pooler connection string in .env.')
  c=psycopg.connect(DATABASE_URL,row_factory=dict_row,connect_timeout=10,prepare_threshold=None,sslmode='require')
  # All catalog/inventory mutations serialize within this app, across processes.
- try:c.execute('SELECT pg_advisory_xact_lock(1095585618, 20261117)')
+ try:
+  if lock:c.execute('SELECT pg_advisory_xact_lock(1095585618, 20261117)')
  except Exception:c.close();raise
  return c
 
@@ -46,6 +49,8 @@ def init():
 
 def get(c,k):return json.loads(c.execute('SELECT value FROM amorap_booking.settings WHERE key=%s',(k,)).fetchone()['value'])
 def save(c,k,v):c.execute('UPDATE amorap_booking.settings SET value=%s WHERE key=%s',(json.dumps(v,ensure_ascii=False),k))
+def revision(v):return hashlib.sha256(json.dumps(v,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+
 def clean(v,n=300,required=False):
  if not isinstance(v,str):raise APIError('Invalid text field.')
  v=v.strip()
@@ -196,9 +201,10 @@ class Handler(BaseHTTPRequestHandler):
   if not isinstance(r,dict):raise APIError('Invalid request.')
   return r
  def session(self):
-  try:cookie=SimpleCookie(self.headers.get('Cookie',''));t=cookie['amora_admin'].value
-  except (KeyError,ValueError):return None
-  with db() as c:
+  try:cookie=SimpleCookie(self.headers.get('Cookie',''));t=cookie[SESSION_COOKIE].value
+  except (KeyError,ValueError,CookieError):return None
+  if not re.fullmatch(r'[A-Za-z0-9_-]{43}',t):return None
+  with db(lock=False) as c:
    s=c.execute('SELECT csrf,expiry FROM amorap_booking.admin_sessions WHERE token=%s AND expiry>%s',(token_hash(t),int(time.time()))).fetchone()
    if s:return t,s
   return None
@@ -207,7 +213,7 @@ class Handler(BaseHTTPRequestHandler):
   if not s:raise APIError('Please sign in.',401)
   if write and not hmac.compare_digest(self.headers.get('X-CSRF-Token',''),s[1]['csrf']):raise APIError('Invalid session token.',403)
   return s
- def cookie(self,t,age):return f'amora_admin={t}; Path=/; HttpOnly; SameSite=Strict; Max-Age={age}'+('; Secure' if SECURE else '')
+ def cookie(self,t,age):return f'{SESSION_COOKIE}={t}; Path=/api/admin/; HttpOnly; SameSite=Lax; Max-Age={age}'+('; Secure' if SECURE else '')
  def origin(self):
   if self.headers.get('Sec-Fetch-Site')=='cross-site':raise APIError('Cross-site request denied.',403)
   org=self.headers.get('Origin')
@@ -229,7 +235,7 @@ class Handler(BaseHTTPRequestHandler):
   except psycopg.OperationalError:
    print('Database connection unavailable.',flush=True)
    if path=='/api/catalog' and method=='GET':return self.respond(fallback_catalog())
-   self.respond({'error':'The reservation service is temporarily unavailable. Please try again later.'},503)
+   self.respond({'error':('The admin database is temporarily unavailable. Please retry; a connection failure does not end your session.' if path.startswith('/api/admin/') else 'The reservation service is temporarily unavailable. Please try again later.')},503)
   except Exception as e:
    print('Server error:',type(e).__name__,flush=True)
    if path=='/api/catalog' and method=='GET':return self.respond(fallback_catalog())
@@ -283,16 +289,16 @@ class Handler(BaseHTTPRequestHandler):
     old.append(now)
    if not isinstance(v.get('username'),str) or not isinstance(v.get('password'),str) or not hmac.compare_digest(v['username'].encode(),USER.encode()) or not hmac.compare_digest(v['password'].encode(),PASSWORD.encode()):raise APIError('Incorrect credentials.',401)
    t=secrets.token_urlsafe(32);csrf=secrets.token_urlsafe(32)
-   with db() as c:
+   with db(lock=False) as c:
     c.execute('DELETE FROM amorap_booking.admin_sessions WHERE expiry<=%s',(int(now),))
-    c.execute('INSERT INTO amorap_booking.admin_sessions (token,csrf,expiry) VALUES (%s,%s,%s)',(token_hash(t),csrf,int(now)+28800))
+    c.execute('INSERT INTO amorap_booking.admin_sessions (token,csrf,expiry) VALUES (%s,%s,%s)',(token_hash(t),csrf,int(now)+SESSION_SECONDS))
    with LOCK:ATTEMPTS.pop(ip,None)
-   return self.respond({'csrf':csrf},cookie=self.cookie(t,28800))
+   return self.respond({'csrf':csrf},cookie=self.cookie(t,SESSION_SECONDS))
   if path.startswith('/api/admin/'):
    t,s=self.admin(method!='GET')
    if path=='/api/admin/session' and method=='GET':return self.respond({'csrf':s['csrf']})
    if path=='/api/admin/logout' and method=='POST':
-    with db() as c:c.execute('DELETE FROM amorap_booking.admin_sessions WHERE token=%s',(token_hash(t),))
+    with db(lock=False) as c:c.execute('DELETE FROM amorap_booking.admin_sessions WHERE token=%s',(token_hash(t),))
     return self.respond({'ok':True},cookie=self.cookie('',0))
    if path=='/api/admin/upload' and method=='POST':
     v=self.body();data=v.get('data','')
@@ -308,21 +314,24 @@ class Handler(BaseHTTPRequestHandler):
     return self.respond({'url':'/uploads/'+name})
    with db() as c:
     if path=='/api/admin/data' and method=='GET':
-     holding(c);return self.respond({**{k:get(c,k) for k in ('rooms','addons','payment','services')},'bookings':[booking_record(r) for r in c.execute('SELECT * FROM amorap_booking.reservations ORDER BY created DESC')],'messages':[{'id':r['id'],'created':r['created'],**json.loads(r['payload'])} for r in c.execute('SELECT * FROM amorap_booking.messages ORDER BY created DESC')]})
+     holding(c);settings={k:get(c,k) for k in ('rooms','addons','payment','services')};return self.respond({**settings,'revisions':{k:revision(v) for k,v in settings.items()},'bookings':[booking_record(r) for r in c.execute('SELECT * FROM amorap_booking.reservations ORDER BY created DESC')],'messages':[{'id':r['id'],'created':r['created'],**json.loads(r['payload'])} for r in c.execute('SELECT * FROM amorap_booking.messages ORDER BY created DESC')]})
     if path in ('/api/admin/rooms','/api/admin/addons','/api/admin/payment','/api/admin/services') and method=='PUT':
      v=self.body();key=path.rsplit('/',1)[1]
+     expected=self.headers.get('If-Match')
+     if expected and expected!=revision(get(c,key)):raise APIError('Another administrator changed these settings. Your edits are still here. Copy them if needed, then refresh before saving.',409)
      if key=='rooms':val=validate_rooms(c,v.get('items'))
      elif key=='addons':val=validate_addons(v.get('items'))
      elif key=='services':val=validate_services(v.get('items'))
      else:val={k:clean(v.get(k,''),n) for k,n in [('bank',150),('name',150),('number',150),('instructions',2000)]}
-     save(c,key,val);c.commit();return self.respond({'ok':True})
+     if key=='payment' and any(val[k] for k in ('bank','name','number')) and not payment_ready(val):raise APIError('Complete all three bank fields, or leave all three blank to disable payment.')
+     save(c,key,val);c.commit();return self.respond({'ok':True,'value':val,'revision':revision(val)})
     if path=='/api/admin/status' and method=='POST':
      v=self.body();rid=ident(v.get('id'));status=v.get('status'); holding(c)
      r=c.execute('SELECT * FROM amorap_booking.reservations WHERE id=%s',(rid,)).fetchone()
      if not r:raise APIError('Reservation not found.',404)
      transitions={'awaiting_payment':('confirmed','cancelled'),'payment_review':('confirmed','cancelled'),'confirmed':('cancelled',),'expired':(),'cancelled':()}
      if status not in transitions.get(r['status'],()):raise APIError('This status change is not permitted.')
-     c.execute('UPDATE amorap_booking.reservations SET status=%s WHERE id=%s',(status,rid));c.commit();return self.respond({'ok':True})
+     c.execute('UPDATE amorap_booking.reservations SET status=%s WHERE id=%s',(status,rid));c.commit();return self.respond({'ok':True,'booking':booking_record({**r,'status':status})})
    raise APIError('Not found.',404)
   with db() as c:
    if path=='/api/catalog' and method=='GET':return self.respond(public_catalog(c))
