@@ -95,15 +95,19 @@ def browser_tests(port,db):
     # This verifies browser interactions, not real browser cookie transport or hosted rendering.
     with sync_playwright() as pw:
         browser=pw.chromium.launch(executable_path=os.environ.get('QA_CHROMIUM','/usr/bin/chromium'),args=['--no-sandbox','--disable-dev-shm-usage'],headless=True)
-        context=browser.new_context();errors=[];faults={'data':0,'session':0,'rooms':0};cookie={'value':''}
+        context=browser.new_context();errors=[];faults={'data':0,'session':0,'rooms':0};cookie={'value':'','drop_next_login':False};extra_faults={}
         def bridge(path,options):
             part=path.split('?')[0].rsplit('/',1)[-1]
+            if extra_faults.get(part):
+                status,payload=extra_faults[part].pop(0);return {'status':status,'body':json.dumps(payload)}
             if path.startswith('/api/admin/') and faults.get(part,0)>0:
                 faults[part]-=1;return {'status':503,'body':json.dumps({'error':'Simulated temporary outage'})}
             headers=options.get('headers',{});headers['Host']='127.0.0.1:'+str(port)
             if cookie['value']:headers['Cookie']=cookie['value']
             conn=http.client.HTTPConnection('127.0.0.1',port,timeout=15);conn.request(options.get('method') or 'GET',path,body=options['body'].encode('utf-8') if options.get('body') is not None else None,headers=headers);res=conn.getresponse();raw=res.read();status=res.status;ck=res.getheader('Set-Cookie');conn.close()
-            if ck:cookie['value']=server.SESSION_COOKIE+'='+SimpleCookie(ck)[server.SESSION_COOKIE].value
+            if ck:
+                if part=='login' and cookie['drop_next_login']:cookie['drop_next_login']=False;cookie['value']=''
+                else:cookie['value']=server.SESSION_COOKIE+'='+SimpleCookie(ck)[server.SESSION_COOKIE].value
             return {'status':status,'body':raw.decode('utf-8')}
         def open_page(old=None):
             if old:old.close()
@@ -114,8 +118,17 @@ def browser_tests(port,db):
         page=open_page();expect(page.locator('#admin-login')).to_be_visible()
         def login():
             page.locator('[name=username]').fill(server.USER);page.locator('[name=password]').fill(server.PASSWORD);page.locator('#login-form button').click();expect(page.locator('#dashboard')).to_be_visible()
+        cookie['drop_next_login']=True;page.locator('[name=username]').fill(server.USER);page.locator('[name=password]').fill(server.PASSWORD);page.locator('#login-form button').click();expect(page.locator('#login-error')).to_contain_text('session cookie was not returned');expect(page.locator('#dashboard')).to_be_hidden()
         faults['data']=1;login();expect(page.get_by_text('Retry loading dashboard')).to_be_visible();expect(page.locator('#admin-login')).to_be_hidden();page.get_by_text('Retry loading dashboard').click();expect(page.get_by_text('Save all villas',exact=True)).to_be_visible()
         page=open_page(page);expect(page.get_by_text('Save all villas',exact=True)).to_be_visible();faults['session']=1;page=open_page(page);expect(page.locator('#retry-session')).to_be_visible();expect(page.locator('#admin-login')).to_be_hidden();page.locator('#retry-session').click();expect(page.get_by_text('Save all villas',exact=True)).to_be_visible()
+        extra_faults['data']=[(401,{'error':'Proxy authorization response'})];page.get_by_text('Refresh',exact=True).click();expect(page.locator('#admin-error')).to_contain_text('Proxy authorization response');expect(page.locator('#dashboard')).to_be_visible();extra_faults['data']=[(401,{'error':'Temporary missing cookie','code':'SESSION_MISSING'})];page.get_by_text('Refresh',exact=True).click();expect(page.locator('#admin-message')).to_contain_text('Dashboard refreshed');expect(page.locator('#dashboard')).to_be_visible()
+        # A broken section must not hide healthy sections or offer unsafe saves.
+        with db.connect() as c:
+            saved_services=c.execute('SELECT value FROM settings WHERE key=%s',('services',)).fetchone()['value'];c.execute('UPDATE settings SET value=%s WHERE key=%s',('not-json','services'))
+        page.locator('[data-tab=services]').click();expect(page.get_by_text('Section temporarily unavailable')).to_be_visible();expect(page.get_by_text('Save all services')).to_have_count(0);expect(page.locator('#admin-login')).to_be_hidden()
+        page.locator('[data-tab=rooms]').click();expect(page.get_by_text('Save all villas')).to_be_visible()
+        with db.connect() as c:c.execute('UPDATE settings SET value=%s WHERE key=%s',(saved_services,'services'))
+        page.locator('[data-tab=services]').click();expect(page.get_by_text('Save all services')).to_be_visible();page.locator('[data-tab=rooms]').click();expect(page.get_by_text('Save all villas')).to_be_visible()
         card=page.locator('[data-index="0"]');card.locator('summary').click();card.locator('[name=name]').fill('QA Browser Villa');faults['rooms']=1;page.get_by_text('Save all villas',exact=True).click();expect(page.locator('#admin-error')).to_contain_text('Simulated');expect(card.locator('[name=name]')).to_have_value('QA Browser Villa');page.get_by_text('Save all villas',exact=True).click();expect(page.locator('#admin-message')).to_contain_text('Saved successfully');expect(card.locator('summary')).to_contain_text('QA Browser Villa')
         # Force session expiration during a pending edit, then recover the DOM draft.
         card.locator('summary').click();card.locator('[name=description]').fill('Preserve unsaved browser draft');with_expire(db)

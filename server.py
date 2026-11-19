@@ -1,7 +1,5 @@
 """AMORAP direct reservations. Python 3.10+; Supabase PostgreSQL backend."""
-import utils.transport
-import utils.session
-import os, sys, json, secrets, hashlib, hmac, mimetypes, re, time, base64, threading
+import os, sys, json, secrets, hashlib, hmac, mimetypes, re, time, base64, threading, traceback
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -16,11 +14,15 @@ load_dotenv(ROOT/'.env')
 DATABASE_URL=os.environ.get('AMORAP_DATABASE_URL',''); USER=os.environ.get('AMORA_ADMIN_USER','admin'); PASSWORD=os.environ.get('AMORA_ADMIN_PASSWORD',''); SECURE=os.environ.get('AMORA_SECURE_COOKIE','0')=='1'
 ATTEMPTS={}; LOCK=threading.Lock(); HOLD_SECONDS=24*3600
 SESSION_SECONDS=24*3600
-SESSION_COOKIE="amorap_admin_v2"
+SESSION_COOKIE="amorap_admin_v3"
+SESSION_RENEW_AFTER=3600
+ADMIN_VERSION="20261119-session3"
+DASHBOARD_RELEASE="20261119-dashboard-isolation-1"
+PUBLIC_ORIGIN=os.environ.get("AMORA_PUBLIC_ORIGIN", "").rstrip("/")
 PREVIEW='--preview' in sys.argv
 SEED=json.loads((ROOT/'seed.json').read_text(encoding='utf-8'))
 class APIError(Exception):
- def __init__(self,message,status=400): super().__init__(message);self.status=status
+ def __init__(self,message,status=400,code=None): super().__init__(message);self.status=status;self.code=code
 
 def db(lock=True):
  if PREVIEW:raise APIError('Preview only. Connect Supabase to enable bookings, contact messages and admin.',503)
@@ -47,7 +49,23 @@ def init():
   body=migration.split('BEGIN;',1)[1].rsplit('COMMIT;',1)[0]
   c.execute(body)
 
-def get(c,k):return json.loads(c.execute('SELECT value FROM amorap_booking.settings WHERE key=%s',(k,)).fetchone()['value'])
+def decode_json(value):
+ # Older deployments may use JSON/JSONB rather than the current text columns.
+ return json.loads(value) if isinstance(value,(str,bytes,bytearray)) else value
+
+def get(c,k):
+ row=c.execute('SELECT value FROM amorap_booking.settings WHERE key=%s',(k,)).fetchone()
+ # Serverless imports do not run init(). Populate only missing keys; never
+ # replace an existing setting (including intentionally empty lists).
+ if row is None and k in SEED:
+  c.execute('INSERT INTO amorap_booking.settings (key,value) VALUES (%s,%s) ON CONFLICT (key) DO NOTHING',(k,json.dumps(SEED[k],ensure_ascii=False)))
+  row=c.execute('SELECT value FROM amorap_booking.settings WHERE key=%s',(k,)).fetchone()
+ if row is None:raise APIError('A required hotel setting is missing. Contact support. (SETTING_MISSING)',503,'SETTING_MISSING')
+ try:
+  value=decode_json(row['value'])
+ except (ValueError,TypeError):raise APIError(f'The saved {k} settings are invalid. Contact support; existing data has not been changed.',500,'SETTING_INVALID')
+ if k in SEED and not isinstance(value,type(SEED[k])):raise APIError(f'The saved {k} settings have an invalid format. Contact support; existing data has not been changed.',500,'SETTING_INVALID')
+ return value
 def save(c,k,v):c.execute('UPDATE amorap_booking.settings SET value=%s WHERE key=%s',(json.dumps(v,ensure_ascii=False),k))
 def revision(v):return hashlib.sha256(json.dumps(v,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
 
@@ -79,9 +97,12 @@ def dates(a,b):
  if x<today() or not 1<=(y-x).days<=60 or x>today()+timedelta(days=730):raise APIError('Choose future stay dates for 1–60 nights.')
  return x,y
 
-def holding(c):
+def expire_holds(c):
  now=int(time.time());c.execute("UPDATE amorap_booking.reservations SET status='expired' WHERE status='awaiting_payment' AND expires<=%s",(now,))
- return [json.loads(r['payload']) for r in c.execute("SELECT payload FROM amorap_booking.reservations WHERE status IN ('awaiting_payment','payment_review','confirmed')")]
+
+def holding(c):
+ expire_holds(c)
+ return [decode_json(r['payload']) for r in c.execute("SELECT payload FROM amorap_booking.reservations WHERE status IN ('awaiting_payment','payment_review','confirmed')")]
 
 def quote(c,v):
  selected=v.get('rooms',[]); services=v.get('services',[]); addons=v.get('addons',[])
@@ -179,7 +200,56 @@ def guest(v):
  return out
 
 def booking_record(r):
- return {'id':r['id'],'status':r['status'],'created':r['created'],'expires':r['expires'],'reference':r['reference'],**json.loads(r['payload'])}
+ return {'id':r['id'],'status':r['status'],'created':r['created'],'expires':r['expires'],'reference':r['reference'],**decode_json(r['payload'])}
+
+def dashboard_error(section,e):
+ ref=secrets.token_hex(5)
+ state=getattr(e,'sqlstate',None)
+ frames=' > '.join(f'{Path(f.filename).name}:{f.lineno}:{f.name}' for f in traceback.extract_tb(e.__traceback__)[-5:])
+ print(f'AMORAP dashboard {ref}: section={section} {type(e).__name__} SQLSTATE={state} {frames}',flush=True)
+ code='DATABASE_SCHEMA_ERROR' if state in ('42P01','42703','3F000') else 'DATABASE_PERMISSION_ERROR' if state=='42501' else 'DATABASE_UNAVAILABLE' if isinstance(e,psycopg.OperationalError) else (e.code if isinstance(e,APIError) and e.code else 'DASHBOARD_SECTION_ERROR')
+ text={'DATABASE_SCHEMA_ERROR':'Database structure is incomplete.','DATABASE_PERMISSION_ERROR':'Database access is not configured for this section.','DATABASE_UNAVAILABLE':'Database connection interrupted.','SETTING_INVALID':'Saved settings have an invalid format.','SETTING_MISSING':'A required setting is missing.'}.get(code,'This section could not be loaded.')
+ return {'error':f'{text} Reference: {ref}','code':code,'reference':ref}
+
+def admin_section(c,key):
+ if key in ('rooms','addons','payment','services'):
+  result=get(c,key)
+  if key!='payment':
+   for row in result:
+    if not isinstance(row,dict) or not isinstance(row.get('id'),str):raise APIError('Invalid stored catalog record.',500,'SETTING_INVALID')
+    if key=='rooms' and any(not isinstance(row.get(field,[]),list) or any(not isinstance(x,str) for x in row.get(field,[])) for field in ('images','amenities')):raise APIError('Invalid stored villa record.',500,'SETTING_INVALID')
+  return result
+ if key=='bookings':
+  expire_holds(c)
+  records=[booking_record(r) for r in c.execute('SELECT * FROM amorap_booking.reservations ORDER BY created DESC')]
+  for record in records:
+   if not isinstance(record.get('guest'),dict) or not isinstance(record.get('payment'),dict) or not isinstance(record.get('status'),str) or any(not isinstance(record.get(field,[]),list) or any(not isinstance(x,dict) for x in record.get(field,[])) for field in ('rooms','addons','services')) or not all(field in record for field in ('rooms','addons')):raise APIError('Invalid stored reservation record.',500,'RESERVATION_FORMAT_ERROR')
+  return records
+ if key=='messages':return [{'id':r['id'],'created':r['created'],**decode_json(r['payload'])} for r in c.execute('SELECT * FROM amorap_booking.messages ORDER BY created DESC')]
+ raise ValueError('Unknown dashboard section')
+
+def dashboard_data(c):
+ # Each section has a savepoint: PostgreSQL aborts a transaction on SQL errors
+ # until it is rolled back. A broken read cannot poison the remaining reads.
+ payload={'revisions':{},'sectionErrors':{},'release':DASHBOARD_RELEASE}
+ for key in ('rooms','addons','payment','services','bookings','messages'):
+  c.execute('SAVEPOINT admin_section_read')
+  try:
+   result=admin_section(c,key)
+   # Verify JSON compatibility before giving it to the HTTP responder.
+   json.dumps(result,ensure_ascii=False,allow_nan=False)
+   rev=revision(result) if key in ('rooms','addons','payment','services') else None
+   c.execute('RELEASE SAVEPOINT admin_section_read')
+  except Exception as e:
+   # A lost physical connection cannot be repaired by a savepoint. Let the
+   # normal connection error handler respond rather than claiming data loaded.
+   c.execute('ROLLBACK TO SAVEPOINT admin_section_read')
+   c.execute('RELEASE SAVEPOINT admin_section_read')
+   payload['sectionErrors'][key]=dashboard_error(key,e)
+   continue
+  payload[key]=result
+  if rev is not None:payload['revisions'][key]=rev
+ return payload
 
 def token_hash(t):return hashlib.sha256(t.encode()).hexdigest()
 class Handler(BaseHTTPRequestHandler):
@@ -188,6 +258,8 @@ class Handler(BaseHTTPRequestHandler):
   self.send_header('X-Content-Type-Options','nosniff');self.send_header('Referrer-Policy','no-referrer');self.send_header('X-Frame-Options','DENY');self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'; object-src 'none'");super().end_headers()
  def respond(self,data,status=200,cookie=None):
   raw=json.dumps(data,ensure_ascii=False).encode();self.send_response(status);self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(raw)))
+  if urlsplit(self.path).path.startswith('/api/admin/'):
+   self.send_header('Vary','Cookie');self.send_header('Pragma','no-cache');self.send_header('CDN-Cache-Control','no-store');self.send_header('Surrogate-Control','no-store');self.send_header('X-AMORAP-Admin-Version',ADMIN_VERSION);self.send_header('X-AMORAP-Dashboard-Release',DASHBOARD_RELEASE)
   if cookie:self.send_header('Set-Cookie',cookie)
   self.end_headers();
   if self.command!='HEAD':self.wfile.write(raw)
@@ -201,23 +273,34 @@ class Handler(BaseHTTPRequestHandler):
   if not isinstance(r,dict):raise APIError('Invalid request.')
   return r
  def session(self):
-  try:cookie=SimpleCookie(self.headers.get('Cookie',''));t=cookie[SESSION_COOKIE].value
-  except (KeyError,ValueError,CookieError):return None
-  if not re.fullmatch(r'[A-Za-z0-9_-]{43}',t):return None
+  try:t=SimpleCookie(self.headers.get('Cookie',''))[SESSION_COOKIE].value
+  except (KeyError,ValueError,CookieError):raise APIError('No admin session cookie received.',401,'SESSION_MISSING')
+  if not re.fullmatch(r'[A-Za-z0-9_-]{43}',t):raise APIError('Invalid admin session cookie.',401,'SESSION_INVALID')
   with db(lock=False) as c:
    s=c.execute('SELECT csrf,expiry FROM amorap_booking.admin_sessions WHERE token=%s AND expiry>%s',(token_hash(t),int(time.time()))).fetchone()
-   if s:return t,s
-  return None
+  if not s:raise APIError('Your admin session has expired or was signed out.',401,'SESSION_EXPIRED')
+  return t,s
  def admin(self,write=False):
-  s=self.session()
-  if not s:raise APIError('Please sign in.',401)
-  if write and not hmac.compare_digest(self.headers.get('X-CSRF-Token',''),s[1]['csrf']):raise APIError('Invalid session token.',403)
-  return s
- def cookie(self,t,age):return f'{SESSION_COOKIE}={t}; Path=/api/admin/; HttpOnly; SameSite=Lax; Max-Age={age}'+('; Secure' if SECURE else '')
+  t,s=self.session()
+  if write and not hmac.compare_digest(self.headers.get('X-CSRF-Token',''),s['csrf']):raise APIError('Invalid session token.',403,'CSRF_INVALID')
+  return t,s
+ def cookie(self,t,age):
+  # HTTPS reverse proxies terminate TLS before forwarding to this server. Only
+  # use forwarded protocol to ADD Secure, never to bypass an origin check.
+  secure=SECURE or self.headers.get('X-Forwarded-Proto','').split(',')[0].strip().lower()=='https' or self.headers.get('Origin','').startswith('https://') or PUBLIC_ORIGIN.startswith('https://') or hasattr(self.connection,'cipher')
+  return f'{SESSION_COOKIE}={t}; Path=/; HttpOnly; SameSite=Lax; Max-Age={age}'+('; Secure' if secure else '')+('' if age else '; Expires=Thu, 01 Jan 1970 00:00:00 GMT')
  def origin(self):
-  if self.headers.get('Sec-Fetch-Site')=='cross-site':raise APIError('Cross-site request denied.',403)
-  org=self.headers.get('Origin')
-  if org and urlsplit(org).netloc!=self.headers.get('Host'):raise APIError('Cross-site request denied.',403)
+  site=self.headers.get('Sec-Fetch-Site','');org=self.headers.get('Origin','')
+  if site in ('cross-site','same-site'):raise APIError('Cross-site request denied.',403,'ORIGIN_DENIED')
+  if not org:return
+  parsed=urlsplit(org)
+  if parsed.scheme not in ('http','https') or not parsed.netloc or parsed.path or parsed.query or parsed.fragment:raise APIError('Cross-site request denied.',403,'ORIGIN_DENIED')
+  if PUBLIC_ORIGIN:
+   if org==PUBLIC_ORIGIN:return
+  elif parsed.netloc==self.headers.get('Host') or site=='same-origin':return
+  # Browsers set Sec-Fetch-Site themselves; an internal proxy Host may differ
+  # from the public origin. For older browsers configure AMORA_PUBLIC_ORIGIN.
+  raise APIError('Request origin does not match the configured website. Check the canonical host or reverse proxy.',403,'ORIGIN_DENIED')
  def do_GET(self):self.dispatch('GET')
  def do_HEAD(self):self.dispatch('HEAD')
  def do_POST(self):self.dispatch('POST')
@@ -230,16 +313,22 @@ class Handler(BaseHTTPRequestHandler):
     return self.static(path)
    if method!='GET':self.origin()
    return self.api(method,path)
-  except APIError as e:self.respond({'error':str(e)},e.status)
+  except APIError as e:self.respond({'error':str(e),**({'code':e.code} if e.code else {})},e.status)
   except (BrokenPipeError,ConnectionResetError):pass
   except psycopg.OperationalError:
    print('Database connection unavailable.',flush=True)
    if path=='/api/catalog' and method=='GET':return self.respond(fallback_catalog())
    self.respond({'error':('The admin database is temporarily unavailable. Please retry; a connection failure does not end your session.' if path.startswith('/api/admin/') else 'The reservation service is temporarily unavailable. Please try again later.')},503)
   except Exception as e:
-   print('Server error:',type(e).__name__,flush=True)
+   ref=secrets.token_hex(5)
+   # Do not print exception text, query parameters, credentials or customer data.
+   frames=' > '.join(f'{Path(f.filename).name}:{f.lineno}:{f.name}' for f in traceback.extract_tb(e.__traceback__)[-6:])
+   print(f'AMORAP error {ref}: {method} {path[:100]} {type(e).__name__} SQLSTATE={getattr(e,"sqlstate",None)} {frames}',flush=True)
    if path=='/api/catalog' and method=='GET':return self.respond(fallback_catalog())
-   self.respond({'error':'An unexpected server error occurred.'},500)
+   code='DASHBOARD_DATA_ERROR' if path=='/api/admin/data' else 'SERVER_ERROR'
+   if getattr(e,'sqlstate',None) in ('42P01','42703','3F000'):code='DATABASE_SCHEMA_ERROR'
+   msg=('Hotel database setup is incomplete. Apply the AMORAP dashboard repair SQL.' if code=='DATABASE_SCHEMA_ERROR' else 'Dashboard data could not be loaded. Contact support with the error reference.' if code=='DASHBOARD_DATA_ERROR' else 'An unexpected server error occurred.')
+   self.respond({'error':f'{msg} Reference: {ref}','code':code,'reference':ref},500)
  def static(self,path):
   if path.startswith('/uploads/'):
    name=path.split('/')[-1]
@@ -265,7 +354,7 @@ class Handler(BaseHTTPRequestHandler):
     start=int(m[1]) if m[1] else max(0,size-int(m[2]));end=min(size-1,int(m[2])) if m[1] and m[2] else size-1;partial=True
    if not m or start>end or start>=size:
     self.send_response(416);self.send_header('Content-Range',f'bytes */{size}');self.send_header('Content-Length','0');self.end_headers();return
-  self.send_response(206 if partial else 200);self.send_header('Content-Type',mime+('; charset=utf-8' if mime.startswith('text/') else ''));self.send_header('Content-Length',str(end-start+1));self.send_header('Cache-Control','no-store' if mime=='text/html' else 'public, max-age=300')
+  self.send_response(206 if partial else 200);self.send_header('Content-Type',mime+('; charset=utf-8' if mime.startswith('text/') else ''));self.send_header('Content-Length',str(end-start+1));self.send_header('Cache-Control','no-store' if mime=='text/html' or f.name=='admin.js' else 'public, max-age=300')
   if mime=='video/mp4':self.send_header('Accept-Ranges','bytes')
   if partial:self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
   self.end_headers()
@@ -293,10 +382,17 @@ class Handler(BaseHTTPRequestHandler):
     c.execute('DELETE FROM amorap_booking.admin_sessions WHERE expiry<=%s',(int(now),))
     c.execute('INSERT INTO amorap_booking.admin_sessions (token,csrf,expiry) VALUES (%s,%s,%s)',(token_hash(t),csrf,int(now)+SESSION_SECONDS))
    with LOCK:ATTEMPTS.pop(ip,None)
-   return self.respond({'csrf':csrf},cookie=self.cookie(t,SESSION_SECONDS))
+   return self.respond({'csrf':csrf,'expiresAt':int(now)+SESSION_SECONDS,'version':ADMIN_VERSION},cookie=self.cookie(t,SESSION_SECONDS))
   if path.startswith('/api/admin/'):
    t,s=self.admin(method!='GET')
-   if path=='/api/admin/session' and method=='GET':return self.respond({'csrf':s['csrf']})
+   if path=='/api/admin/session' and method=='GET':
+    now=int(time.time());expiry=s['expiry'];cookie=None
+    if expiry<=now+SESSION_SECONDS-SESSION_RENEW_AFTER:
+     with db(lock=False) as c:
+      renewed=c.execute('UPDATE amorap_booking.admin_sessions SET expiry=%s WHERE token=%s AND expiry>%s RETURNING expiry',(now+SESSION_SECONDS,token_hash(t),now)).fetchone()
+     if not renewed:raise APIError('Your admin session has expired or was signed out.',401,'SESSION_EXPIRED')
+     expiry=renewed['expiry'];cookie=self.cookie(t,SESSION_SECONDS)
+    return self.respond({'csrf':s['csrf'],'expiresAt':expiry,'version':ADMIN_VERSION},cookie=cookie)
    if path=='/api/admin/logout' and method=='POST':
     with db(lock=False) as c:c.execute('DELETE FROM amorap_booking.admin_sessions WHERE token=%s',(token_hash(t),))
     return self.respond({'ok':True},cookie=self.cookie('',0))
@@ -314,11 +410,12 @@ class Handler(BaseHTTPRequestHandler):
     return self.respond({'url':'/uploads/'+name})
    with db() as c:
     if path=='/api/admin/data' and method=='GET':
-     holding(c);settings={k:get(c,k) for k in ('rooms','addons','payment','services')};return self.respond({**settings,'revisions':{k:revision(v) for k,v in settings.items()},'bookings':[booking_record(r) for r in c.execute('SELECT * FROM amorap_booking.reservations ORDER BY created DESC')],'messages':[{'id':r['id'],'created':r['created'],**json.loads(r['payload'])} for r in c.execute('SELECT * FROM amorap_booking.messages ORDER BY created DESC')]})
+     payload=dashboard_data(c);c.commit();return self.respond(payload)
     if path in ('/api/admin/rooms','/api/admin/addons','/api/admin/payment','/api/admin/services') and method=='PUT':
      v=self.body();key=path.rsplit('/',1)[1]
      expected=self.headers.get('If-Match')
-     if expected and expected!=revision(get(c,key)):raise APIError('Another administrator changed these settings. Your edits are still here. Copy them if needed, then refresh before saving.',409)
+     current=get(c,key)
+     if expected and expected!=revision(current):raise APIError('Another administrator changed these settings. Your edits are still here. Copy them if needed, then refresh before saving.',409)
      if key=='rooms':val=validate_rooms(c,v.get('items'))
      elif key=='addons':val=validate_addons(v.get('items'))
      elif key=='services':val=validate_services(v.get('items'))
