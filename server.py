@@ -16,8 +16,8 @@ ATTEMPTS={}; LOCK=threading.Lock(); HOLD_SECONDS=24*3600
 SESSION_SECONDS=24*3600
 SESSION_COOKIE="amorap_admin_v3"
 SESSION_RENEW_AFTER=3600
-ADMIN_VERSION="20261119-session3"
-DASHBOARD_RELEASE="20261119-dashboard-isolation-1"
+ADMIN_VERSION="20261120-photo1"
+DASHBOARD_RELEASE="20261120-photo1"
 PUBLIC_ORIGIN=os.environ.get("AMORA_PUBLIC_ORIGIN", "").rstrip("/")
 PREVIEW='--preview' in sys.argv
 SEED=json.loads((ROOT/'seed.json').read_text(encoding='utf-8'))
@@ -89,7 +89,32 @@ def ident(v):
  return v
 
 def enabled(r):return (r.get('active',False) and r.get('reviewed',True) and r['price'] is not None and r['price']>0 and r['capacity']>0 and r['inventory']>0)
-def payment_ready(p):return all(p.get(k) for k in ('bank','name','number'))
+def payment_methods(p):
+ """Configured manual-payment choices; never trust a browser-selected account."""
+ if not isinstance(p,dict):return []
+ methods=[]
+ if all(isinstance(p.get(k),str) and p[k].strip() for k in ('bank','name','number')):methods.append('bank')
+ if all(isinstance(p.get(k),str) and p[k].strip() for k in ('gcashName','gcashNumber')):methods.append('gcash')
+ return methods
+
+def payment_ready(p):return bool(payment_methods(p))
+
+def payment_snapshot(config,method):
+ choices=payment_methods(config)
+ if not method and len(choices)==1:method=choices[0]  # older bank-only clients
+ if method not in choices:raise APIError('Choose an available payment method before reserving.',409)
+ if method=='gcash':return {'method':'gcash','bank':'GCash','name':config['gcashName'],'number':config['gcashNumber'],'instructions':config.get('gcashInstructions','')}
+ return {'method':'bank','bank':config['bank'],'name':config['name'],'number':config['number'],'instructions':config.get('instructions','')}
+
+def validate_payment(v,previous=None):
+ previous=previous or {}
+ fields=[('bank',150),('name',150),('number',150),('instructions',2000),('gcashName',150),('gcashNumber',40),('gcashInstructions',2000)]
+ out={k:clean(v.get(k,previous.get(k,'')),limit) for k,limit in fields}
+ bank_fields=('bank','name','number');gcash_fields=('gcashName','gcashNumber')
+ if any(out[k] for k in bank_fields) and not all(out[k] for k in bank_fields):raise APIError('Complete all local bank account fields, or leave all three blank.')
+ if any(out[k] for k in gcash_fields) and not all(out[k] for k in gcash_fields):raise APIError('Enter both the GCash account name and mobile number, or leave both blank.')
+ if out['gcashNumber'] and not re.fullmatch(r'(?:09\d{9}|\+639\d{9})',out['gcashNumber']):raise APIError('Enter a valid GCash number, e.g. 09XXXXXXXXX or +639XXXXXXXXX.')
+ return out
 def today():return datetime.now(timezone(timedelta(hours=8))).date()
 def dates(a,b):
  try:x=date.fromisoformat(a);y=date.fromisoformat(b)
@@ -148,6 +173,16 @@ def quote(c,v):
  total=sum(x['total'] for x in lines+supplementary+service_lines)
  return {'checkin':a.isoformat() if a else None,'checkout':b.isoformat() if b else None,'nights':nights,'rooms':lines,'addons':supplementary,'services':service_lines,'total':total,'currency':'PHP'}
 
+def validate_photo_urls(c,images,max_images=15):
+ if not isinstance(images,list) or len(images)>max_images:raise APIError(f'Choose up to {max_images} photos.')
+ seed_photos={im for room in SEED['rooms'] for im in room.get('images',[])}
+ for url in images:
+  if not isinstance(url,str):raise APIError('Invalid photo URL.')
+  if url in seed_photos and (PUBLIC/url.lstrip('/')).is_file():continue
+  if not re.fullmatch(r'/(?:uploads|api/photo)/[a-f0-9]{32}\.(jpg|png|webp)',url):raise APIError('Upload photos using the dashboard.')
+  if not c.execute('SELECT 1 FROM amorap_booking.photos WHERE name=%s',(Path(url).name,)).fetchone():raise APIError('An uploaded photo is missing. Upload it again.')
+ return images
+
 def validate_rooms(c,rows):
  if not isinstance(rows,list) or len(rows)>100:raise APIError('Invalid room list.')
  result=[]; ids=set()
@@ -156,10 +191,8 @@ def validate_rooms(c,rows):
   rid=ident(r.get('id'))
   if rid in ids:raise APIError('Duplicate villa ID.')
   ids.add(rid);amen=r.get('amenities',[]);imgs=r.get('images',[])
-  if not isinstance(amen,list) or len(amen)>40 or not isinstance(imgs,list) or len(imgs)>15:raise APIError('Invalid amenities or photos.')
-  for x in imgs:
-   if isinstance(x,str) and x in {im for sr in SEED['rooms'] for im in sr['images']} and (PUBLIC/x.lstrip('/')).is_file():continue
-   if not isinstance(x,str) or not re.fullmatch(r'/uploads/[a-f0-9]{32}\.(jpg|png|webp)',x) or not c.execute('SELECT 1 FROM amorap_booking.photos WHERE name=%s',(Path(x).name,)).fetchone():raise APIError('Upload photos using the dashboard.')
+  if not isinstance(amen,list) or len(amen)>40:raise APIError('Invalid amenities.')
+  imgs=validate_photo_urls(c,imgs)
   result.append({'id':rid,'name':clean(r.get('name'),120,True),'category':clean(r.get('category',''),100),'description':clean(r.get('description',''),3000),'price':amount(r.get('price')),'capacity':integer(r.get('capacity'),0,100),'inventory':integer(r.get('inventory'),0,1000),'bed':clean(r.get('bed',''),200),'size':clean(r.get('size',''),100),'policy':clean(r.get('policy',''),2000),'amenities':[clean(x,150,True) for x in amen],'images':imgs,'active':r.get('active') is True,'reviewed':r.get('reviewed',True) is True})
  return result
 
@@ -177,21 +210,22 @@ def validate_addons(rows):
 
 def service_enabled(r):return r.get('active') is True and r.get('reviewed') is True and (r.get('price') or 0)>0 and r.get('capacity',0)>0
 
-def validate_services(rows):
+def validate_services(c,rows):
  if not isinstance(rows,list) or len(rows)>100:raise APIError('Invalid service list.')
  result=[];ids=set()
  for r in rows:
   if not isinstance(r,dict):raise APIError('Invalid service.')
   sid=ident(r.get('id'));kind=r.get('kind')
   if sid in ids or kind not in ('event','dining'):raise APIError('Invalid or duplicate service.')
-  ids.add(sid);result.append({'id':sid,'kind':kind,'name':clean(r.get('name'),120,True),'description':clean(r.get('description',''),3000),'price':amount(r.get('price')),'capacity':integer(r.get('capacity'),0,1000),'active':r.get('active') is True,'reviewed':r.get('reviewed') is True})
+  imgs=validate_photo_urls(c,r.get('images',[]),12)
+  ids.add(sid);result.append({'id':sid,'kind':kind,'name':clean(r.get('name'),120,True),'description':clean(r.get('description',''),3000),'price':amount(r.get('price')),'capacity':integer(r.get('capacity'),0,1000),'images':imgs,'active':r.get('active') is True,'reviewed':r.get('reviewed') is True})
  return result
 
 def fallback_catalog():
- return {'rooms':[{**r,'bookable':False} for r in SEED['rooms'] if r['active']], 'addons':[], 'services':[{**r,'bookable':False} for r in SEED['services'] if r['active']], 'paymentReady':False,'fallback':True}
+ return {'rooms':[{**r,'bookable':False} for r in SEED['rooms'] if r['active']], 'addons':[], 'services':[{**r,'bookable':False} for r in SEED['services'] if r['active']], 'paymentReady':False,'paymentMethods':[],'fallback':True}
 
 def public_catalog(c):
- return {'rooms':[{**r,'bookable':enabled(r)} for r in get(c,'rooms') if r['active']], 'addons':[r for r in get(c,'addons') if r['active'] and r['price'] is not None], 'services':[{**r,'bookable':service_enabled(r)} for r in get(c,'services') if r['active']], 'paymentReady':payment_ready(get(c,'payment'))}
+ return {'rooms':[{**r,'bookable':enabled(r)} for r in get(c,'rooms') if r['active']], 'addons':[r for r in get(c,'addons') if r['active'] and r['price'] is not None], 'services':[{**r,'bookable':service_enabled(r)} for r in get(c,'services') if r['active']], 'paymentReady':payment_ready(get(c,'payment')),'paymentMethods':payment_methods(get(c,'payment'))}
 
 def guest(v):
  if not isinstance(v,dict):raise APIError('Enter guest details.')
@@ -218,6 +252,7 @@ def admin_section(c,key):
    for row in result:
     if not isinstance(row,dict) or not isinstance(row.get('id'),str):raise APIError('Invalid stored catalog record.',500,'SETTING_INVALID')
     if key=='rooms' and any(not isinstance(row.get(field,[]),list) or any(not isinstance(x,str) for x in row.get(field,[])) for field in ('images','amenities')):raise APIError('Invalid stored villa record.',500,'SETTING_INVALID')
+    if key=='services' and (not isinstance(row.get('images',[]),list) or any(not isinstance(x,str) for x in row.get('images',[]))):raise APIError('Invalid stored service photos.',500,'SETTING_INVALID')
   return result
  if key=='bookings':
   expire_holds(c)
@@ -329,16 +364,18 @@ class Handler(BaseHTTPRequestHandler):
    if getattr(e,'sqlstate',None) in ('42P01','42703','3F000'):code='DATABASE_SCHEMA_ERROR'
    msg=('Hotel database setup is incomplete. Apply the AMORAP dashboard repair SQL.' if code=='DATABASE_SCHEMA_ERROR' else 'Dashboard data could not be loaded. Contact support with the error reference.' if code=='DASHBOARD_DATA_ERROR' else 'An unexpected server error occurred.')
    self.respond({'error':f'{msg} Reference: {ref}','code':code,'reference':ref},500)
+ def serve_photo(self,name):
+  # Keep legacy /uploads links working, but use /api/photo for new uploads so
+  # Vercel configurations that route /api/* to Python also serve the image.
+  if not re.fullmatch(r'[a-f0-9]{32}\.(jpg|png|webp)',name):raise APIError('Not found.',404)
+  with db(lock=False) as c:
+   photo=c.execute('SELECT content,mime FROM amorap_booking.photos WHERE name=%s',(name,)).fetchone()
+  if not photo:raise APIError('Not found.',404)
+  raw=bytes(photo['content']);self.send_response(200);self.send_header('Content-Type',photo['mime']);self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','public, max-age=300');self.send_header('X-Content-Type-Options','nosniff');self.end_headers();
+  if self.command!='HEAD':self.wfile.write(raw)
  def static(self,path):
   if path.startswith('/uploads/'):
-   name=path.split('/')[-1]
-   if not re.fullmatch(r'[a-f0-9]{32}\.(jpg|png|webp)',name):raise APIError('Not found.',404)
-   with db() as c:
-    photo=c.execute('SELECT content,mime FROM amorap_booking.photos WHERE name=%s',(name,)).fetchone()
-   if not photo:raise APIError('Not found.',404)
-   raw=bytes(photo['content']);self.send_response(200);self.send_header('Content-Type',photo['mime']);self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','public, max-age=300');self.end_headers();
-   if self.command!='HEAD':self.wfile.write(raw)
-   return
+   return self.serve_photo(path.split('/')[-1])
   else:
    f=(PUBLIC/path.lstrip('/')).resolve()
    if not f.is_relative_to(PUBLIC) or any(part.startswith('.') for part in Path(path).parts[1:]):raise APIError('Not found.',404)
@@ -366,8 +403,9 @@ class Handler(BaseHTTPRequestHandler):
      if not chunk:break
      self.wfile.write(chunk);left-=len(chunk)
  def api(self,method,path):
+  if path.startswith('/api/photo/') and method=='GET':return self.serve_photo(path.split('/')[-1])
   if PREVIEW:
-   if path=='/api/catalog' and method=='GET':return self.respond({'rooms':[{**r,'bookable':False} for r in SEED['rooms'] if r['active']],'addons':[],'services':[{**r,'bookable':False} for r in SEED['services'] if r['active']],'paymentReady':False,'preview':True})
+   if path=='/api/catalog' and method=='GET':return self.respond({'rooms':[{**r,'bookable':False} for r in SEED['rooms'] if r['active']],'addons':[],'services':[{**r,'bookable':False} for r in SEED['services'] if r['active']],'paymentReady':False,'paymentMethods':[],'preview':True})
    raise APIError('Preview only. Configure Supabase and restart without --preview to enable this feature.',503)
   if path=='/api/admin/login' and method=='POST':
    if len(PASSWORD)<12:raise APIError('Admin setup required: set AMORA_ADMIN_PASSWORD to at least 12 characters.',503)
@@ -401,13 +439,13 @@ class Handler(BaseHTTPRequestHandler):
     if not isinstance(data,str):raise APIError('Invalid photo.')
     try:raw=base64.b64decode(data,validate=True)
     except Exception:raise APIError('Invalid photo.')
-    if len(raw)>6_000_000:raise APIError('Photo exceeds 6 MB.')
+    if not raw or len(raw)>2_000_000:raise APIError('Photo is too large. Choose another photo or allow the browser to optimize it (2 MB maximum).',413)
     ext='jpg' if raw.startswith(b'\xff\xd8\xff') else 'png' if raw.startswith(b'\x89PNG\r\n\x1a\n') else 'webp' if raw[:4]==b'RIFF' and raw[8:12]==b'WEBP' else None
     if not ext:raise APIError('Choose a JPEG, PNG or WebP photo.')
     name=secrets.token_hex(16)+'.'+ext
     mime={'jpg':'image/jpeg','png':'image/png','webp':'image/webp'}[ext]
     with db() as c:c.execute('INSERT INTO amorap_booking.photos (name,mime,content) VALUES (%s,%s,%s)',(name,mime,raw))
-    return self.respond({'url':'/uploads/'+name})
+    return self.respond({'url':'/api/photo/'+name})
    with db() as c:
     if path=='/api/admin/data' and method=='GET':
      payload=dashboard_data(c);c.commit();return self.respond(payload)
@@ -418,9 +456,8 @@ class Handler(BaseHTTPRequestHandler):
      if expected and expected!=revision(current):raise APIError('Another administrator changed these settings. Your edits are still here. Copy them if needed, then refresh before saving.',409)
      if key=='rooms':val=validate_rooms(c,v.get('items'))
      elif key=='addons':val=validate_addons(v.get('items'))
-     elif key=='services':val=validate_services(v.get('items'))
-     else:val={k:clean(v.get(k,''),n) for k,n in [('bank',150),('name',150),('number',150),('instructions',2000)]}
-     if key=='payment' and any(val[k] for k in ('bank','name','number')) and not payment_ready(val):raise APIError('Complete all three bank fields, or leave all three blank to disable payment.')
+     elif key=='services':val=validate_services(c,v.get('items'))
+     else:val=validate_payment(v,current)
      save(c,key,val);c.commit();return self.respond({'ok':True,'value':val,'revision':revision(val)})
     if path=='/api/admin/status' and method=='POST':
      v=self.body();rid=ident(v.get('id'));status=v.get('status'); holding(c)
@@ -439,7 +476,7 @@ class Handler(BaseHTTPRequestHandler):
     if not payment_ready(p):raise APIError('Direct payment is not configured yet. Please contact the resort.',409)
     q=quote(c,v)
     if v.get('expectedTotal') is not None and v['expectedTotal']!=q['total']:raise APIError('The price has changed. Return to checkout to review the updated total.',409)
-    rid='AM-'+secrets.token_hex(5).upper();token=secrets.token_urlsafe(32);now=int(time.time());payload={**q,'guest':person,'payment':p}
+    rid='AM-'+secrets.token_hex(5).upper();token=secrets.token_urlsafe(32);now=int(time.time());payload={**q,'guest':person,'payment':payment_snapshot(p,v.get('paymentMethod'))}
     expires=min([now+HOLD_SECONDS]+[int(datetime.fromisoformat(l['date']+'T'+l['time']+':00+08:00').timestamp()) for l in q['services']])
     if expires<=now:raise APIError('Choose a future reservation time.')
     c.execute('INSERT INTO amorap_booking.reservations (id,token,status,created,expires,payload,reference) VALUES(%s,%s,%s,%s,%s,%s,%s)',(rid,token_hash(token),'awaiting_payment',now,expires,json.dumps(payload,ensure_ascii=False),''));c.commit()

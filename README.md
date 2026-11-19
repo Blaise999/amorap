@@ -103,8 +103,46 @@ Tests: backend quote/validation unit tests with in-memory settings and reservati
 
 ## Admin reliability and QA update — 2026-11-19
 
-Apply the patch over the existing project root (the folder containing `server.py`). Keep `.env`, `.git`, the existing schema and customer records. Restart/redeploy the Python backend and public files together because the admin now expects revision-aware save responses. No migration or database reset is required if the original schema was already installed. Sign in once after deployment: the session cookie has a new AMORAP-specific name and is scoped to `/api/admin/`. Sessions last 24 hours and still expire server-side. Use one canonical HTTPS hostname in production, set `AMORA_SECURE_COOKIE=1`, and configure your reverse proxy to forward the original public Host header. For localhost HTTP only, leave the secure-cookie setting at 0. Never mix local and hosted URLs when testing session continuity.
+Apply the patch over the existing project root (the folder containing `server.py`). Keep `.env`, `.git`, the existing schema and customer records. Restart/redeploy the Python backend and public files together because the admin now expects revision-aware save responses. No migration or database reset is required if the original schema was already installed. Sign in once after deployment: the session cookie has a new AMORAP-specific name, is host-only and is scoped to `/`. Sessions have a rolling 24-hour window while the dashboard is open and connected, and still expire server-side. Use one canonical HTTPS hostname in production, set `AMORA_SECURE_COOKIE=1`, and configure your reverse proxy to forward the original public Host header. For localhost HTTP only, leave the secure-cookie setting at 0. Never mix local and hosted URLs when testing session continuity.
 
 A database/API outage no longer sends the administrator back to login. The dashboard provides a retry action; unsaved edits are kept in the open page, including when a genuine expiry requires signing in again. Do not close/reload the page with unsaved changes. Concurrent save requests are blocked in the UI, and obsolete revisions are rejected rather than overwriting another editor's newer data. Saving settings updates the public catalog on the next catalog load, not a push to already-open pages. Bank fields can be cleared together to pause new payments; existing reservations retain the account details that were recorded when they were created. Actual transfers still require independent staff verification.
 
 Run the isolated QA suite with `python tests/qa_admin.py`. It uses a disposable SQLite test adapter, not the real Supabase database. Optional offline Chromium DOM tests: install Playwright and Chromium locally, point `QA_CHROMIUM` to the Chromium executable and run `python tests/qa_admin.py --browser`. The test harness replaces browser fetch with a bridge to the real local Python HTTP handlers and emulates cookie transport because browser navigation was blocked in this environment. See `QA_REPORT.md` for results and hosted-site acceptance checks.
+
+
+## Admin session reliability update — session3
+
+Apply this patch to the project root, preserving `.env`, `.git`, and the existing Supabase schema. Restart/redeploy the Python backend and `public/` files together. The new cookie name is `amorap_admin_v3`; existing staff must sign in once. No new SQL or password reset.
+
+- Login verifies that the browser returns the HttpOnly session cookie before revealing the dashboard. A structured message distinguishes missing cookies, revoked/expired sessions, upstream errors, and outdated backend versions.
+- A visible dashboard checks the session every five minutes and on focus return. A successful check renews the database expiry and cookie when at least one hour has elapsed. The session remains valid for up to 24 hours after its last renewal; inactivity beyond that still requires login. It is not an unlimited login.
+- All admin API responses and the admin script are non-cacheable. A proxy 401 or temporary database failure alone does not sign out staff. State-changing actions are retried only after explicit pre-mutation auth/CSRF rejection and successful session validation. No access token is placed in localStorage.
+- For HTTPS production set `AMORA_SECURE_COOKIE=1` and optionally `AMORA_PUBLIC_ORIGIN=https://your-actual-website.example` (the exact canonical public origin, no path; replace the example). Leave `AMORA_PUBLIC_ORIGIN` unset and `AMORA_SECURE_COOKIE=0` for localhost HTTP. The proxy should forward the original Host, `X-Forwarded-Proto`, `Cookie`, `Set-Cookie`, `Origin` and `Sec-Fetch-Site`; do not cache `/api/admin/*` or the admin page. Use the same hostname throughout, not mixed www/non-www, HTTP/HTTPS or a separate static frontend.
+- If login is accepted but the session cookie isn't returned, check the browser's Network panel for a `Set-Cookie` on POST `/api/admin/login` and the matching Cookie on GET `/api/admin/session`. Do not share cookie or CSRF values. If the API reports an outdated backend, redeploy both server and assets.
+
+QA: `python tests/qa_admin.py` and `python tests/qa_sessions.py`. Optional `python tests/qa_sessions.py --tls` uses OpenSSL to generate a disposable local certificate. Optional `python tests/qa_admin.py --browser` runs offline Chromium DOM coverage. See `SESSION_QA.md` for the scope and limitations.
+
+## Date-first booking and two payment choices — 2026-11-20
+
+The booking journey now asks for **check-in and check-out dates first**, before showing villa choices. Direct Book buttons on the villas page also request dates before opening that villa's quantity and guest form. The dates are shared across all villas in the cart and can be changed before checkout. Event/dining reservations continue to use their own date, time and party-size forms.
+
+At checkout the guest chooses **Local bank transfer** or **GCash**. The resort administrator configures each independently under **Admin → Payments**. Both options are visibly listed; an option is disabled until its verified account details have been saved. Existing bank settings remain intact. No dummy account numbers or automatic payment verification have been added. Customers receive the instructions and account for only their selected method after placing a reservation and enter a transaction reference for staff to review. Past reservations retain the payment account and method saved when booked. Manual payment confirmation is still required.
+
+This upgrade adds optional keys (`gcashName`, `gcashNumber`, `gcashInstructions`) to the existing `amorap_booking.settings` payment JSON. **No new SQL migration or schema changes** are required, and previous settings are preserved. Old clients may keep using bank-only reservations while only the bank option is configured. Ensure the deployed Python backend and `public/` assets are redeployed together, then open the admin Payments tab to enter the resort's real GCash mobile number and name. Keep `.env` outside Git.
+
+Isolated QA commands:
+
+```powershell
+python tests/qa_admin.py --browser
+python tests/qa_dashboard_recovery.py
+python tests/qa_payment_flow.py --browser
+```
+
+The suites use disposable SQLite test adapters and Chromium DOM tests, never production Supabase credentials or real financial transactions. Production database, hosting/cookie behavior and actual bank/GCash payments still require owner verification.
+
+
+## Admin photo upload (Villas / Events & Dining)
+
+In `/admin/`, open **Villas** or **Events & dining**, expand an item, and use its **Upload pictures** input. Choose one or more images from a phone or computer (JPG, PNG, WebP, or browser-supported HEIC). The browser optimizes each photo before uploading it (up to 1.5 MB stored image); **Save all villas** or **Save all services** to publish the new gallery. The first photo is the public cover; choose **Make cover** to change it. Remove a picture and save to unpublish it. Other edits and reservations are preserved.
+
+Uploads go through authenticated `/api/admin/upload` and are stored in the existing private `amorap_booking.photos` table; the catalog stores URL references. `/api/photo/<name>` serves new uploads via the same `/api` backend that supports bookings; legacy `/uploads/<name>` links remain supported when routed to Python. The database schema must have been initialized with `supabase_setup.sql`, including the `photos` table. Existing installations with that table need **no new SQL**. Do not deploy only `public` to Vercel; its `/api` and `/uploads/` routes must reach the Python backend. If the deployment routes `/api/*` to Python, new photo URLs require no separate `/uploads` rewrite.
