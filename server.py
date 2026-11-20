@@ -16,8 +16,8 @@ ATTEMPTS={}; LOCK=threading.Lock(); HOLD_SECONDS=24*3600
 SESSION_SECONDS=24*3600
 SESSION_COOKIE="amorap_admin_v3"
 SESSION_RENEW_AFTER=3600
-ADMIN_VERSION="20261120-photo1"
-DASHBOARD_RELEASE="20261120-photo1"
+ADMIN_VERSION="20261120-delete1"
+DASHBOARD_RELEASE="20261120-delete1"
 PUBLIC_ORIGIN=os.environ.get("AMORA_PUBLIC_ORIGIN", "").rstrip("/")
 PREVIEW='--preview' in sys.argv
 SEED=json.loads((ROOT/'seed.json').read_text(encoding='utf-8'))
@@ -227,6 +227,19 @@ def fallback_catalog():
 def public_catalog(c):
  return {'rooms':[{**r,'bookable':enabled(r)} for r in get(c,'rooms') if r['active']], 'addons':[r for r in get(c,'addons') if r['active'] and r['price'] is not None], 'services':[{**r,'bookable':service_enabled(r)} for r in get(c,'services') if r['active']], 'paymentReady':payment_ready(get(c,'payment')),'paymentMethods':payment_methods(get(c,'payment'))}
 
+def remove_unreferenced_photos(c, images):
+ # Only delete actual stored uploads, never bundled resort photos. Keep a
+ # photo if it is still used by another villa, event or dining listing.
+ if not images:return
+ try:
+  references={url for section in ('rooms','services') for item in get(c,section) for url in item.get('images',[]) if isinstance(url,str)}
+ except Exception:
+  # On a damaged catalog, keep the files; do not risk deleting shared photos.
+  return
+ for url in set(images)-references:
+  if re.fullmatch(r'/(?:api/photo|uploads)/[a-f0-9]{32}\.(?:jpg|png|webp)',url):
+   c.execute('DELETE FROM amorap_booking.photos WHERE name=%s',(url.rsplit('/',1)[-1],))
+
 def guest(v):
  if not isinstance(v,dict):raise APIError('Enter guest details.')
  out={k:clean(v.get(k,''),n,req) for k,n,req in [('name',150,True),('email',200,True),('phone',70,True),('requests',2000,False)]}
@@ -340,6 +353,7 @@ class Handler(BaseHTTPRequestHandler):
  def do_HEAD(self):self.dispatch('HEAD')
  def do_POST(self):self.dispatch('POST')
  def do_PUT(self):self.dispatch('PUT')
+ def do_DELETE(self):self.dispatch('DELETE')
  def dispatch(self,method):
   path=unquote(urlsplit(self.path).path)
   try:
@@ -447,6 +461,39 @@ class Handler(BaseHTTPRequestHandler):
     with db() as c:c.execute('INSERT INTO amorap_booking.photos (name,mime,content) VALUES (%s,%s,%s)',(name,mime,raw))
     return self.respond({'url':'/api/photo/'+name})
    with db() as c:
+    if path=='/api/admin/discard-photo' and method=='DELETE':
+     # A freshly uploaded picture may be removed before a catalog Save.
+     # Never remove any image already used by a saved villa or service.
+     url=self.body().get('url')
+     if not isinstance(url,str) or not re.fullmatch(r'/api/photo/[a-f0-9]{32}\.(?:jpg|png|webp)',url):raise APIError('Only new dashboard uploads can be discarded.')
+     if any(url in item.get('images',[]) for key in ('rooms','services') for item in get(c,key)):
+      raise APIError('This picture is already published. Use Delete photo on the listing.',409)
+     c.execute('DELETE FROM amorap_booking.photos WHERE name=%s',(url.rsplit('/',1)[-1],))
+     c.commit()
+     return self.respond({'ok':True})
+    if path in ('/api/admin/delete-item','/api/admin/delete-photo') and method=='DELETE':
+     v=self.body();section=v.get('section')
+     allowed=('rooms','services','addons') if path.endswith('delete-item') else ('rooms','services')
+     if section not in allowed:raise APIError('Invalid catalog section.')
+     rid=ident(v.get('id'));items=get(c,section)
+     expected=self.headers.get('If-Match')
+     if not expected:raise APIError('Refresh your dashboard before deleting. Missing revision.',428)
+     if expected!=revision(items):raise APIError('Someone changed this section. Refresh before deleting; no changes were made.',409)
+     target=next((item for item in items if item.get('id')==rid),None)
+     if target is None:raise APIError('This item no longer exists. Refresh the dashboard.',404)
+     removed=[]
+     if path.endswith('delete-item'):
+      updated=[item for item in items if item.get('id')!=rid]
+      removed=list(target.get('images',[]))
+     else:
+      url=v.get('url')
+      if not isinstance(url,str) or url not in target.get('images',[]):raise APIError('Photo not found in this listing. Refresh and retry.',404)
+      updated=[{**item,'images':[im for im in item['images'] if im!=url]} if item.get('id')==rid else item for item in items]
+      removed=[url]
+     save(c,section,updated)
+     remove_unreferenced_photos(c,removed)
+     c.commit()
+     return self.respond({'ok':True,'value':updated,'revision':revision(updated)})
     if path=='/api/admin/data' and method=='GET':
      payload=dashboard_data(c);c.commit();return self.respond(payload)
     if path in ('/api/admin/rooms','/api/admin/addons','/api/admin/payment','/api/admin/services') and method=='PUT':

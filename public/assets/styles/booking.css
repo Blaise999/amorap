@@ -55,3 +55,12 @@
 .am-admin-photo button{font-size:12px;min-height:27px;padding:3px 0;text-align:left}
 .am-admin-photos:empty:before{content:'No pictures uploaded yet.';font-size:13px;opacity:.65}
 @media(max-width:600px){.am-admin-photo{width:calc(50% - 5px)}.am-admin-photo img{width:100%;height:120px}}
+
+/* Visible, confirmed catalog deletion controls */
+.am-admin .am-summary{display:flex;align-items:center;gap:10px;flex-wrap:wrap;cursor:pointer;min-height:42px}
+.am-admin .am-summary .am-tag{margin-right:auto}
+.am-admin .am-delete-inline{padding:8px 11px;min-height:34px;font-size:11px;letter-spacing:.02em;margin-left:auto;flex:none}
+.am-admin .am-delete-inline:hover{background:#8d3c31;color:#fff}
+.am-admin .am-admin-photo [data-remove-photo]{border:1px solid #b68b84;color:#873b31;background:#fff;padding:5px 8px;text-decoration:none}
+.am-admin .am-admin-photo [data-remove-photo]:hover{background:#8d3c31;color:#fff}
+@media(max-width:520px){.am-admin .am-summary{align-items:flex-start}.am-admin .am-delete-inline{margin-left:0}}
