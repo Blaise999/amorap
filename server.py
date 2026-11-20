@@ -16,8 +16,8 @@ ATTEMPTS={}; LOCK=threading.Lock(); HOLD_SECONDS=24*3600
 SESSION_SECONDS=24*3600
 SESSION_COOKIE="amorap_admin_v3"
 SESSION_RENEW_AFTER=3600
-ADMIN_VERSION="20261120-simple1"
-DASHBOARD_RELEASE="20261120-simple1"
+ADMIN_VERSION="20261120-ratestable1"
+DASHBOARD_RELEASE="20261120-ratestable1"
 PUBLIC_ORIGIN=os.environ.get("AMORA_PUBLIC_ORIGIN", "").rstrip("/")
 PREVIEW='--preview' in sys.argv
 SEED=json.loads((ROOT/'seed.json').read_text(encoding='utf-8'))
