@@ -1,3 +1,19 @@
+# Easy Admin update — 20 November 2026
+
+The AMORAP dashboard now has three main actions: **Rooms & prices**, **Bookings**, and **Payment options**. Other features (Events & dining, Extras, Messages) are under **More sections**.
+
+**Adding a room:** Admin → Rooms & prices → **+ Add room** → enter name, nightly price in PHP, number of rooms and guest capacity → optionally upload photos → tick **Price and availability checked** when correct → **Save room**. Use the same screen to change prices. **More room details** includes policies, descriptions and amenities. The **Save room** action also saves any other pending room edits visible in the list.
+
+**Accepting two payment methods:** Admin → Payment options. Enter the local bank name, account holder and account number, plus GCash account holder and mobile number. Click **Save payment options**. The guest checkout lists **Local bank transfer** and **GCash** separately. Each option becomes selectable only when its respective real account details are complete. Never enter placeholder account numbers to simulate payment availability.
+
+**Installation:** Copy this update into the existing `amorap_repaired` folder. Keep `.env` and `.git` untouched. You must deploy the updated `server.py`, `public/admin/index.html`, `public/assets/admin.js` and `public/assets/styles/booking.css` **together**, since the new UI checks the server release version. No Supabase migration is required. Redeploy Vercel and refresh the admin page.
+
+**Tests:** `python tests/qa_admin.py` for backend regressions; `python tests/qa_easy_admin_ui.py` for the new admin browser interface; `python tests/qa_payment_flow.py --browser` for guest checkout. Tests use isolated test data and do not update live Supabase.
+
+**Limitations:** No production login, payment transfer or live Supabase/Vercel end-to-end connection was tested in this environment. These are manual transfer methods, not instant payment processing. The owner must configure real payment accounts before both can accept bookings.
+
+---
+
 # AMORAP — connected direct-booking website
 
 A cleaned, connected version of the uploaded project. Python 3.10+ / Supabase PostgreSQL; no original Next.js application or third-party booking integration is needed. All public pages live in `public/`; the private backend, SQL, seed data and environment configuration remain outside this web root.

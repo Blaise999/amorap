@@ -64,3 +64,53 @@
 .am-admin .am-admin-photo [data-remove-photo]{border:1px solid #b68b84;color:#873b31;background:#fff;padding:5px 8px;text-decoration:none}
 .am-admin .am-admin-photo [data-remove-photo]:hover{background:#8d3c31;color:#fff}
 @media(max-width:520px){.am-admin .am-summary{align-items:flex-start}.am-admin .am-delete-inline{margin-left:0}}
+
+/* Simple admin 2026-11: primary room rate, photos, optional advanced fields */
+.am-admin-wrap{max-width:1120px!important}
+.am-simple-tabs{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:20px 0 28px}
+.am-simple-tabs>button,.am-simple-tabs>.am-admin-more-nav>summary{font-size:13px;font-weight:600;letter-spacing:0;text-transform:none;padding:13px 18px;border-radius:8px;border:1px solid #dcd7c9;min-height:46px;cursor:pointer}
+.am-simple-tabs>button.selected{background:#34493a!important;border-color:#34493a!important;color:white!important}
+.am-admin-more-nav{position:relative;z-index:2}
+.am-admin-more-nav>summary{list-style:none;background:#fff;color:#34493a;display:flex;align-items:center;gap:9px}
+.am-admin-more-nav>summary::after{content:'⌄';font-size:16px}.am-admin-more-nav>summary::-webkit-details-marker{display:none}
+.am-admin-more-nav>div{position:absolute;right:0;top:calc(100% + 6px);background:#fff;box-shadow:0 12px 32px #1e29212b;border:1px solid #dfd9cb;border-radius:9px;min-width:200px;padding:7px;display:grid;gap:3px}
+.am-admin-more-nav [data-tab]{display:block;width:100%;background:transparent;color:#2c382e;border:0;padding:11px 12px;text-align:left;border-radius:5px;font-size:13px;cursor:pointer}
+.am-admin-more-nav [data-tab].selected,.am-admin-more-nav [data-tab]:hover{background:#eef1e9}
+.am-simple-room{border-radius:10px!important;overflow:visible;margin-bottom:14px}
+.am-simple-room>.am-room-heading{display:flex;align-items:center;gap:14px;padding:5px 2px;cursor:pointer;list-style:none;min-height:65px}
+.am-simple-room>.am-room-heading::-webkit-details-marker{display:none}
+.am-room-thumb{width:69px;height:63px;background:#edf0e9;border-radius:7px;display:flex;align-items:center;justify-content:center;flex:none;font-size:27px;overflow:hidden}
+.am-room-thumb img{width:100%;height:100%;object-fit:cover}
+.am-room-heading-text{display:flex;flex:1;min-width:100px;flex-direction:column;gap:5px}
+.am-room-heading-text strong{font-size:18px;color:#21382b;font-weight:600}
+.am-room-heading-text small{font-size:13px;color:#6c7369}
+.am-room-heading-text small b{color:#3e5b42;font-weight:700}
+.am-room-heading .am-tag{white-space:nowrap;margin:0;font-size:11px}
+.am-edit-hint{font-size:12px;color:#80663b;white-space:nowrap;font-weight:600}
+.am-simple-room[open] .am-room-editor{border-top:1px solid #e6e1d6;padding-top:20px;margin-top:10px}
+.am-simple-help{font-size:13px;color:#6b746a;line-height:1.55;margin:0 0 14px}
+.am-room-primary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:22px}
+.am-room-primary-grid .am-field{margin:0}
+.am-room-primary-grid .am-field:nth-child(2){background:#f4f0e5;padding:12px;border-radius:7px;border:1px solid #d9c7a1}
+.am-room-primary-grid .am-field:nth-child(2) input{background:white;font-weight:700;font-size:19px;color:#344b36}
+.am-simple-photo-block{padding:18px;border:1px solid #e3e0d7;border-radius:8px;margin-bottom:20px}
+.am-simple-photo-block h3{margin:0 0 11px;font:600 17px var(--am-sans)}
+.am-upload-button{display:inline-flex;position:relative;align-items:center;background:#e9eee5;color:#25402f;padding:12px 17px;border-radius:7px;font-weight:700;cursor:pointer;margin-bottom:10px}
+.am-upload-button input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%}
+.am-room-more{border:1px solid #e2e0d8;border-radius:8px;margin:14px 0;padding:13px 16px}
+.am-room-more>summary{font-weight:600;font-size:14px;color:#425e45;cursor:pointer;list-style:revert}
+.am-room-more>.am-form-grid{padding:18px 0 5px}
+.am-simple-publish{display:grid;gap:11px;padding:15px 0}
+.am-simple-publish small{font-size:12px;color:#778174}
+.am-room-action-bar{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin-top:10px;padding-top:15px;border-top:1px solid #e5e0d7}
+.am-room-action-bar .am-delete-inline{margin-left:auto}
+.am-payment-admin-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.am-payment-card{margin:0!important;border-radius:10px!important}
+.am-payment-card .am-field{margin:15px 0}
+.am-payment-card-heading{display:flex;align-items:center;gap:13px;border-bottom:1px solid #e5e0d7;padding-bottom:16px;margin-bottom:15px}
+.am-payment-card-heading h3{font-size:19px;font-weight:600;margin:0 0 4px}
+.am-payment-card-heading small{font-size:12px;color:#647f66}
+.am-pay-symbol{width:45px;height:45px;border-radius:8px;background:#e9eee4;color:#2a5038;display:grid;place-items:center;font-weight:800;font-size:23px}
+.am-payment-actions{margin:20px 0;display:flex;align-items:center;gap:20px;justify-content:space-between;flex-wrap:wrap;background:#edf0e9;padding:18px;border-radius:9px}
+.am-payment-actions p{max-width:560px;color:#4f6353;font-size:13px;line-height:1.5;margin:0}
+@media(max-width:720px){.am-room-primary-grid,.am-payment-admin-grid{grid-template-columns:1fr}.am-simple-room>.am-room-heading{gap:8px}.am-room-thumb{width:56px;height:56px}.am-room-heading-text strong{font-size:16px}.am-room-heading .am-tag{display:none}.am-simple-tabs{gap:7px}.am-simple-tabs>button,.am-simple-tabs>.am-admin-more-nav>summary{padding:11px 10px;font-size:12px}.am-admin-more-nav>div{right:auto;left:0}.am-room-action-bar .am-delete-inline{margin-left:0}}
