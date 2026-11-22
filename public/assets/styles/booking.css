@@ -122,3 +122,11 @@
 .am-price-persistent small{font-size:.78rem;color:#5d605b;line-height:1.5;}
 .am-checkout-price{margin-bottom:1.2rem;}
 .am-room-heading [data-price-preview]{font-variant-numeric:tabular-nums;}
+
+/* Guest-facing, admin-configured customer care telephone shortcut */
+.am-call-fab{position:fixed;right:20px;bottom:20px;z-index:1500;display:inline-flex;align-items:center;justify-content:center;min-height:46px;padding:12px 19px;border-radius:28px;background:#234735;color:#fff;font:600 13px/1.2 system-ui,sans-serif;box-shadow:0 8px 24px #0002;text-decoration:none;max-width:calc(100vw - 36px)}
+.am-call-fab:hover,.am-call-fab:focus-visible{background:#163126;color:#fff}
+.am-call-fab[hidden],[data-support-call][hidden]{display:none!important}
+.am-family-editor{background:#f7fbf7;border:1px solid #d8e5d9;padding:18px;margin:16px 0}
+.am-family-editor h3{margin:0 0 8px}
+@media(max-width:560px){.am-call-fab{right:12px;bottom:12px;padding:11px 14px;font-size:12px}}

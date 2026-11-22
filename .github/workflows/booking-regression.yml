@@ -3,7 +3,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [feature/payment-receipts-policy-20261122]
+    branches: [feature/payment-receipts-policy-20261122, feature/kids-pets-customer-care-20261122]
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -19,8 +19,18 @@ jobs:
       - run: python -m compileall -q server.py api/index.py tests
       - name: Guest and admin JavaScript syntax
         run: node --check public/assets/site.js && node --check public/assets/admin.js
+      - name: Install Chromium browser QA tooling
+        run: |
+          python -m pip install playwright
+          python -m playwright install chromium
+      - name: Customer care and family editor browser checks
+        run: python tests/qa_easy_admin_ui.py
+      - name: Guest booking and contact browser checks
+        run: python tests/qa_guest_family_ui.py
       - name: Admin and guest receipt API
         run: python tests/qa_admin.py
+      - name: Family, pet rules, and customer support
+        run: python tests/qa_family_care.py
       - name: Price and inventory API
         run: python tests/qa_price_api.py
       - name: Admin data resilience
