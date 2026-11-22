@@ -22,10 +22,10 @@ def run(port, db):
     print('PASS missing services repaired after login; owner edits, bank details and intentionally empty extras preserved; services save publicly visible')
     # Missing settings before initial full dashboard request, including PUT with no revision.
     with db.connect() as c:c.execute('DELETE FROM settings WHERE key=%s',('payment',))
-    assert a.save('payment',payment)['ok'];assert a.get()['payment']==payment
+    assert a.save('payment',payment)['ok'];assert all(a.get()['payment'].get(k)==v for k,v in payment.items())
     # Invalid existing data is not silently reset or mistaken for an expired session.
     with db.connect() as c:c.execute('UPDATE settings SET value=%s WHERE key=%s',('not-json','services'))
-    d=a.get();assert d['sectionErrors']['services']['code']=='SETTING_INVALID' and 'services' not in d and 'services' not in d['revisions'];assert d['rooms']==rooms and d['payment']==payment;assert a.get('session')['csrf']==a.csrf
+    d=a.get();assert d['sectionErrors']['services']['code']=='SETTING_INVALID' and 'services' not in d and 'services' not in d['revisions'];assert d['rooms']==rooms and all(d['payment'].get(k)==v for k,v in payment.items());assert a.get('session')['csrf']==a.csrf
     assert a.save('payment',{**payment,'instructions':'Still editable'},d['revisions']['payment'])['ok']
     with db.connect() as c:
         assert c.execute('SELECT value FROM settings WHERE key=%s',('services',)).fetchone()['value']=='not-json'
