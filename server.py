@@ -16,8 +16,8 @@ ATTEMPTS={}; LOCK=threading.Lock(); MAX_RECEIPT_BYTES=1_700_000
 SESSION_SECONDS=24*3600
 SESSION_COOKIE="amorap_admin_v3"
 SESSION_RENEW_AFTER=3600
-ADMIN_VERSION="20261122-receipt1"
-DASHBOARD_RELEASE="20261122-receipt1"
+ADMIN_VERSION="20261122-familycare1"
+DASHBOARD_RELEASE="20261122-familycare1"
 PUBLIC_ORIGIN=os.environ.get("AMORA_PUBLIC_ORIGIN", "").rstrip("/")
 PREVIEW='--preview' in sys.argv
 SEED=json.loads((ROOT/'seed.json').read_text(encoding='utf-8'))
@@ -107,6 +107,25 @@ def ident(v):
  return v
 
 def enabled(r):return (isinstance(r,dict) and r.get('active') is True and r.get('reviewed') is True and (r.get('price') or 0)>0 and (r.get('capacity') or 0)>0 and (r.get('inventory') or 0)>0)
+
+def family_rules(r):
+ """Unedited older villas inherit 1BR/2BR defaults; no SQL changes required."""
+ if not isinstance(r,dict):raise APIError('Invalid villa settings.',503,'SETTING_INVALID')
+ bedrooms=r.get('bedrooms', 2 if ('double' in str(r.get('id','')).lower() or '2br' in str(r.get('name','')).lower()) else 1)
+ if type(bedrooms) is not int or not 1<=bedrooms<=20:raise APIError('Invalid bedroom count in villa settings.',503,'SETTING_INVALID')
+ return {
+  'bedrooms':bedrooms,
+  'freeChildUnderAge':r.get('freeChildUnderAge',12),
+  'maxKids':r.get('maxKids',4 if bedrooms>=2 else 2),
+  'petsAllowed':r.get('petsAllowed',False) is True,
+  'maxPets':r.get('maxPets',0),
+  'petFee':r.get('petFee',0),
+  'petPolicy':r.get('petPolicy','')
+ }
+
+def guest_room_policies(r):
+ return {**r,**family_rules(r)}
+
 def payment_methods(p):
  """Configured manual-payment choices; never trust a browser-selected account."""
  if not isinstance(p,dict):return []
@@ -143,6 +162,17 @@ def validate_payment(v,previous=None):
   if any(out[k] for k in gcash_fields) and not all(out[k] for k in gcash_fields):raise APIError('Enter both the GCash account name and mobile number, or clear both to disable GCash.')
   if out['gcashNumber'] and not re.fullmatch(r'(?:09\d{9}|\+639\d{9})',out['gcashNumber']):raise APIError('Enter a valid GCash number, e.g. 09XXXXXXXXX or +639XXXXXXXXX.')
  return out
+
+def validate_support(v):
+ if not isinstance(v,dict):raise APIError('Invalid customer care settings.')
+ phone=clean(v.get('phone',''),40)
+ if phone and (not re.fullmatch(r'[+0-9() .\-]+',phone) or not 7<=len(re.sub(r'\D','',phone))<=15):
+  raise APIError('Enter a valid customer care phone number with country code.')
+ email=clean(v.get('email',''),200)
+ if email and not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email):
+  raise APIError('Enter a valid customer care email address.')
+ return {'phone':phone,'email':email,'hours':clean(v.get('hours',''),160),'greeting':clean(v.get('greeting',''),500)}
+
 def today():return datetime.now(timezone(timedelta(hours=8))).date()
 def dates(a,b):
  try:x=date.fromisoformat(a);y=date.fromisoformat(b)
@@ -183,10 +213,19 @@ def quote(c,v):
   rid=ident(item.get('id'));r=rooms.get(rid)
   if rid in seen or not r or not enabled(r):raise APIError('A selected villa is not currently bookable.')
   seen.add(rid);qty=integer(item.get('qty'),1,30);guests=integer(item.get('guests'),1,r['capacity']*qty)
+  family=family_rules(r)
+  kids=integer(item.get('kids',0),0,integer(family['maxKids'],0,30)*qty)
+  pets=integer(item.get('pets',0),0,30*qty)
+  if pets and (not family['petsAllowed'] or integer(family['maxPets'],0,30)==0):
+   raise APIError('This villa does not allow pets. Choose a pet-friendly villa or remove pets.')
+  if pets>integer(family['maxPets'],0,30)*qty:raise APIError('Too many pets for this villa.')
+  free_age=integer(family['freeChildUnderAge'],0,18)
+  pet_cost=amount(family['petFee']) or 0
+  pet_total=pets*pet_cost
   for day in range(nights):
    night=(a+timedelta(days=day)).isoformat();occupied=sum(l['qty'] for p in booked if p.get('checkin') and p['checkin']<=night<p['checkout'] for l in p['rooms'] if l['id']==rid)
    if occupied+qty>r['inventory']:raise APIError(f"Not enough availability for {r['name']} on {night}.",409)
-  lines.append({'id':rid,'name':r['name'],'qty':qty,'guests':guests,'unit':r['price'],'total':r['price']*qty*nights})
+  lines.append({'id':rid,'name':r['name'],'qty':qty,'guests':guests,'kids':kids,'pets':pets,'freeChildUnderAge':free_age,'petFee':pet_cost,'petTotal':pet_total,'unit':r['price'],'total':r['price']*qty*nights+pet_total})
  seen=set()
  for item in addons:
   if not isinstance(item,dict):raise APIError('Invalid extra.')
@@ -239,7 +278,9 @@ def validate_rooms(c,rows):
   ids.add(rid);amen=r.get('amenities',[]);imgs=r.get('images',[])
   if not isinstance(amen,list) or len(amen)>40:raise APIError('Invalid amenities.')
   imgs=validate_photo_urls(c,imgs,existing_images=previous.get(rid,()))
-  result.append({'id':rid,'name':clean(r.get('name'),120,True),'category':clean(r.get('category',''),100),'description':clean(r.get('description',''),3000),'price':amount(r.get('price')),'capacity':integer(r.get('capacity'),0,100),'inventory':integer(r.get('inventory'),0,1000),'bed':clean(r.get('bed',''),200),'size':clean(r.get('size',''),100),'policy':clean(r.get('policy',''),2000),'amenities':[clean(x,150,True) for x in amen],'images':imgs,'active':r.get('active') is True,'reviewed':r.get('reviewed',True) is True})
+  family=family_rules(r)
+  family={'bedrooms':integer(family['bedrooms'],1,20),'freeChildUnderAge':integer(family['freeChildUnderAge'],0,18),'maxKids':integer(family['maxKids'],0,30),'petsAllowed':family['petsAllowed'],'maxPets':integer(family['maxPets'],0,30),'petFee':amount(family['petFee']) or 0,'petPolicy':clean(family['petPolicy'],1000)}
+  result.append({**family,'id':rid,'name':clean(r.get('name'),120,True),'category':clean(r.get('category',''),100),'description':clean(r.get('description',''),3000),'price':amount(r.get('price')),'capacity':integer(r.get('capacity'),0,100),'inventory':integer(r.get('inventory'),0,1000),'bed':clean(r.get('bed',''),200),'size':clean(r.get('size',''),100),'policy':clean(r.get('policy',''),2000),'amenities':[clean(x,150,True) for x in amen],'images':imgs,'active':r.get('active') is True,'reviewed':r.get('reviewed',True) is True})
  return result
 
 def validate_addons(rows):
@@ -269,11 +310,11 @@ def validate_services(c,rows):
  return result
 
 def fallback_catalog():
- return {'rooms':[{**r,'bookable':False} for r in SEED['rooms'] if r['active']], 'addons':[], 'services':[{**r,'bookable':False} for r in SEED['services'] if r['active']], 'paymentReady':False,'paymentMethods':[],'fallback':True}
+ return {'rooms':[{**guest_room_policies(r),'bookable':False} for r in SEED['rooms'] if r['active']], 'support':SEED.get('support',{}), 'addons':[], 'services':[{**r,'bookable':False} for r in SEED['services'] if r['active']], 'paymentReady':False,'paymentMethods':[],'fallback':True}
 
 def public_catalog(c):
  ensure_room_starters(c)
- return {'rooms':[{**r,'bookable':enabled(r)} for r in get(c,'rooms') if r['active']], 'addons':[r for r in get(c,'addons') if r['active'] and r['price'] is not None], 'services':[{**r,'bookable':service_enabled(r)} for r in get(c,'services') if r['active']], 'paymentReady':payment_ready(get(c,'payment')),'paymentMethods':payment_methods(get(c,'payment'))}
+ return {'rooms':[{**guest_room_policies(r),'bookable':enabled(r)} for r in get(c,'rooms') if r['active']], 'support':get(c,'support'), 'addons':[r for r in get(c,'addons') if r['active'] and r['price'] is not None], 'services':[{**r,'bookable':service_enabled(r)} for r in get(c,'services') if r['active']], 'paymentReady':payment_ready(get(c,'payment')),'paymentMethods':payment_methods(get(c,'payment'))}
 
 def remove_unreferenced_photos(c, images):
  # Only delete actual stored uploads, never bundled resort photos. Keep a
@@ -315,7 +356,7 @@ def validate_receipt_image(encoded):
 def reservation_availability(c,payload):
  # Re-check stock against confirmed reservations at admin confirmation time.
  # Never rely on the availability observed when the guest created an unpaid request.
- rooms=[{'id':x['id'],'qty':x['qty'],'guests':x['guests']} for x in payload.get('rooms',[])]
+ rooms=[{'id':x['id'],'qty':x['qty'],'guests':x['guests'],'kids':x.get('kids',0),'pets':x.get('pets',0)} for x in payload.get('rooms',[])]
  services=[{'id':x['id'],'date':x['date'],'time':x['time'],'guests':x['guests'],'occasion':x.get('occasion','')} for x in payload.get('services',[])]
  addons=[{'id':x['id'],'qty':x['qty']} for x in payload.get('addons',[])]
  return quote(c,{'rooms':rooms,'services':services,'addons':addons,'checkin':payload.get('checkin'),'checkout':payload.get('checkout')})
@@ -343,9 +384,9 @@ def dashboard_error(section,e):
  return {'error':f'{text} Reference: {ref}','code':code,'reference':ref}
 
 def admin_section(c,key):
- if key in ('rooms','addons','payment','services'):
+ if key in ('rooms','addons','payment','services','support'):
   result=get(c,key)
-  if key!='payment':
+  if key not in ('payment','support'):
    for row in result:
     if not isinstance(row,dict) or not isinstance(row.get('id'),str):raise APIError('Invalid stored catalog record.',500,'SETTING_INVALID')
     if key=='rooms' and any(not isinstance(row.get(field,[]),list) or any(not isinstance(x,str) for x in row.get(field,[])) for field in ('images','amenities')):raise APIError('Invalid stored villa record.',500,'SETTING_INVALID')
@@ -365,13 +406,13 @@ def dashboard_data(c):
  # Each section has a savepoint: PostgreSQL aborts a transaction on SQL errors
  # until it is rolled back. A broken read cannot poison the remaining reads.
  payload={'revisions':{},'sectionErrors':{},'release':DASHBOARD_RELEASE}
- for key in ('rooms','addons','payment','services','bookings','messages'):
+ for key in ('rooms','addons','payment','services','support','bookings','messages'):
   c.execute('SAVEPOINT admin_section_read')
   try:
    result=admin_section(c,key)
    # Verify JSON compatibility before giving it to the HTTP responder.
    json.dumps(result,ensure_ascii=False,allow_nan=False)
-   rev=revision(result) if key in ('rooms','addons','payment','services') else None
+   rev=revision(result) if key in ('rooms','addons','payment','services','support') else None
    c.execute('RELEASE SAVEPOINT admin_section_read')
   except Exception as e:
    # A lost physical connection cannot be repaired by a savepoint. Let the
@@ -611,7 +652,7 @@ class Handler(BaseHTTPRequestHandler):
      return self.respond({'ok':True,'value':updated,'revision':revision(updated)})
     if path=='/api/admin/data' and method=='GET':
      payload=dashboard_data(c);c.commit();return self.respond(payload)
-    if path in ('/api/admin/rooms','/api/admin/addons','/api/admin/payment','/api/admin/services') and method=='PUT':
+    if path in ('/api/admin/rooms','/api/admin/addons','/api/admin/payment','/api/admin/services','/api/admin/support') and method=='PUT':
      v=self.body();key=path.rsplit('/',1)[1]
      expected=self.headers.get('If-Match')
      current=get(c,key)
@@ -619,6 +660,7 @@ class Handler(BaseHTTPRequestHandler):
      if key=='rooms':val=validate_rooms(c,v.get('items'))
      elif key=='addons':val=validate_addons(v.get('items'))
      elif key=='services':val=validate_services(c,v.get('items'))
+     elif key=='support':val=validate_support(v)
      else:val=validate_payment(v,current)
      save(c,key,val);c.commit();return self.respond({'ok':True,'value':val,'revision':revision(val)})
     if path=='/api/admin/status' and method=='POST':
@@ -672,7 +714,8 @@ class Handler(BaseHTTPRequestHandler):
      c.execute('DELETE FROM amorap_booking.photos WHERE name=%s',(old,))
     c.commit();return self.respond({'ok':True,'status':'payment_review'})
    if path=='/api/contact' and method=='POST':
-    v=self.body();p={'name':clean(v.get('name',''),150,True),'email':clean(v.get('email',''),200,True),'message':clean(v.get('message',''),3000,True)}
+    v=self.body();p={'name':clean(v.get('name',''),150,True),'email':clean(v.get('email',''),200,True),'phone':clean(v.get('phone',''),40),'message':clean(v.get('message',''),3000,True)}
+    if p['phone'] and (not re.fullmatch(r'[+0-9() .\-]+',p['phone']) or not 7<=len(re.sub(r'\D','',p['phone']))<=15):raise APIError('Enter a valid callback phone number.')
     if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',p['email']):raise APIError('Enter a valid email address.')
     c.execute('INSERT INTO amorap_booking.messages(created,payload) VALUES (%s,%s)',(int(time.time()),json.dumps(p)));c.commit();return self.respond({'ok':True},201)
   raise APIError('Not found.',404)

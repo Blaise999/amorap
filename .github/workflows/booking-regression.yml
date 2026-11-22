@@ -3,7 +3,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [feature/payment-receipts-policy-20261122]
+    branches: [feature/payment-receipts-policy-20261122, feature/kids-pets-customer-care-20261122]
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -21,6 +21,8 @@ jobs:
         run: node --check public/assets/site.js && node --check public/assets/admin.js
       - name: Admin and guest receipt API
         run: python tests/qa_admin.py
+      - name: Family, pet rules, and customer support
+        run: python tests/qa_family_care.py
       - name: Price and inventory API
         run: python tests/qa_price_api.py
       - name: Admin data resilience

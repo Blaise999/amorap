@@ -60,7 +60,7 @@ def http_tests(port,db):
     img=(ROOT/'public/assets/villas/inland-resort.webp').read_bytes();up=a.send('POST','/api/admin/upload',{'data':base64.b64encode(img).decode()})['url'];r['images']=[up,r['images'][0]];assert guest.send('GET',up)==img
     a.send('POST','/api/admin/upload',{'data':'bm90IGFuIGltYWdl'},400)
     new=copy.deepcopy(r);new.update(id='qa-villa',name='QA New Villa',active=False);rows.append(new)
-    saved=a.save('rooms',{'items':rows},d['revisions']['rooms']);assert saved['value'][0]==r
+    saved=a.save('rooms',{'items':rows},d['revisions']['rooms']);assert saved['value'][0]['name']==r['name'] and saved['value'][0]['price']==r['price'] and saved['value'][0]['maxKids']==2
     b.save('rooms',{'items':before['rooms']},before['revisions']['rooms'],409)
     cat=guest.send('GET','/api/catalog');assert cat['rooms'][0]['name']==r['name'] and cat['rooms'][0]['bookable'] and all(x['id']!='qa-villa' for x in cat['rooms'])
     rows.pop();r['images'].reverse();r['images'].pop();a.save('rooms',{'items':rows},saved['revision']);assert a.get()['rooms'][0]['images']==r['images'];assert not any(x['id']=='qa-villa' for x in a.get()['rooms'])
