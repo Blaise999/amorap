@@ -43,7 +43,7 @@ class Client:
         con=http.client.HTTPConnection('127.0.0.1',self.port,timeout=10);con.request(method,path,body,hdr);r=con.getresponse();raw=r.read();cookie=r.getheader('Set-Cookie');status=r.status;con.close()
         if cookie:
             ck=SimpleCookie(cookie);self.cookie=f'{server.SESSION_COOKIE}='+ck[server.SESSION_COOKIE].value
-        assert status==expected,(method,path,status,expected,raw[:300]);return json.loads(raw) if path.startswith('/api/') and not path.startswith('/api/photo/') else raw
+        assert status==expected,(method,path,status,expected,raw[:300]);return json.loads(raw) if path.startswith('/api/') and not path.startswith('/api/photo/') and not path.startswith('/api/admin/receipt/') else raw
     def login(self):self.csrf=self.send('POST','/api/admin/login',{'username':server.USER,'password':server.PASSWORD})['csrf']
     def get(self,p='data',expected=200):return self.send('GET','/api/admin/'+p,expected=expected)
     def save(self,key,body,rev=None,expected=200):return self.send('PUT','/api/admin/'+key,body,expected,rev)
@@ -73,15 +73,23 @@ def http_tests(port,db):
     guest_data={'name':'QA Guest','email':'qa@example.test','phone':'000','requests':'Test'}
     cart={'checkin':tomorrow.isoformat(),'checkout':nextday.isoformat(),'rooms':[{'id':r['id'],'qty':1,'guests':2}],'addons':[{'id':extras[0]['id'],'qty':1}],'services':[{'id':services[0]['id'],'date':tomorrow.isoformat(),'time':'12:00','guests':10,'occasion':'QA Event'},{'id':services[1]['id'],'date':tomorrow.isoformat(),'time':'13:00','guests':2,'occasion':''}]}
     q=guest.send('POST','/api/quote',cart);assert q['total']==3675000,(q['total'],q)
-    booking=guest.send('POST','/api/bookings',{**cart,'expectedTotal':q['total'],'guest':guest_data},201);bid=booking['booking']['id'];tok=booking['token'];assert booking['booking']['payment']['method']=='bank' and all(booking['booking']['payment'][k]==v for k,v in pay.items())
-    guest.send('POST','/api/payment-reference',{'id':bid,'token':tok,'reference':'QA transfer'});assert a.get()['bookings'][0]['reference']=='QA transfer'
+    booking=guest.send('POST','/api/bookings',{**cart,'expectedTotal':q['total'],'guest':guest_data,'paymentPercent':50},201);bid=booking['booking']['id'];tok=booking['token'];assert booking['booking']['payment']['method']=='bank' and all(booking['booking']['payment'][k]==v for k,v in pay.items())
+    assert booking['booking']['dueNow']==(q['total']+1)//2
+    guest.send('POST','/api/quote',cart) # unpaid bookings do NOT reserve inventory
+    a.send('POST','/api/admin/status',{'id':bid,'status':'confirmed'},409)
+    receipt=(ROOT/'public/assets/villas/inland-resort.webp').read_bytes()
+    guest.send('POST','/api/payment-receipt',{'id':bid,'token':tok,'data':base64.b64encode(receipt).decode()})
+    assert a.get()['bookings'][0]['hasReceipt'] is True
+    assert a.send('GET','/api/admin/receipt/'+bid)==receipt
+    guest.send('GET','/api/admin/receipt/'+bid,expected=401)
+    guest.send('POST','/api/payment-receipt',{'id':bid,'token':'wrong','data':base64.b64encode(receipt).decode()},404)
     v=a.send('POST','/api/admin/status',{'id':bid,'status':'confirmed'});assert v['booking']['status']=='confirmed';guest.send('POST','/api/quote',cart,409)
     v=a.send('POST','/api/admin/status',{'id':bid,'status':'cancelled'});assert v['booking']['status']=='cancelled';guest.send('POST','/api/quote',cart)
     a.send('POST','/api/admin/status',{'id':bid,'status':'confirmed'},400)
     guest.send('POST','/api/contact',{'name':'QA sender','email':'qa@example.test','message':'QA contact'},201);assert a.get()['messages'][0]['message']=='QA contact'
     a.save('payment',dict.fromkeys(pay,''),s['revision']);assert not guest.send('GET','/api/catalog')['paymentReady'];assert a.get()['bookings'][0]['payment']['method']=='bank'
     guest.send('POST','/api/bookings',{**cart,'guest':guest_data},409)
-    print('PASS mixed checkout, bank snapshot, transfer review, confirm/cancel, conflict, contact inbox, payment disable')
+    print('PASS mixed checkout, private receipt upload, first-come inventory, verified confirmation, conflict, contact inbox, payment disable')
     token=a.cookie;a.send('POST','/api/admin/logout',{});a.cookie=token;a.get('session',401);assert b.get('session')['csrf']==b.csrf
     with db.connect() as c:c.execute('UPDATE admin_sessions SET expiry=0')
     b.get('session',401);b.login();b.get()
@@ -146,10 +154,10 @@ def browser_tests(port,db):
         last.locator('[data-delete]').click();expect(page.locator('#admin-message')).to_contain_text('Deleted');assert all(x['name']!='UI villa' for x in check.send('GET','/api/catalog')['rooms'])
         select_tab('addons','Optional extras');page.get_by_text('Add extra',exact=True).click();last=page.locator('[data-index]').last;last.locator('[name=name]').fill('UI extra');last.locator('[name=price]').fill('123');page.get_by_text('Save all extras').click();saved();assert any(x['name']=='UI extra' for x in check.send('GET','/api/catalog')['addons']);last.locator('[data-delete]').click();expect(page.locator('#admin-message')).to_contain_text('Deleted')
         select_tab('services','Events & dining');page.get_by_text('Add service',exact=True).click();last=page.locator('[data-index]').last;last.locator('[name=name]').fill('UI event');last.locator('[name=price]').fill('10000');last.locator('[name=capacity]').fill('30');last.locator('[name=reviewed]').check();last.locator('[data-upload]').set_input_files(str(ROOT/'public/assets/villas/inland-resort.webp'));expect(last.locator('[data-remove-photo]')).to_have_count(1);page.get_by_role('button',name='Save all services').click();saved();assert any(x['name']=='UI event' and x['bookable'] and len(x['images'])==1 for x in check.send('GET','/api/catalog')['services']);last.locator('[data-delete]').click();expect(page.locator('#admin-message')).to_contain_text('Deleted')
-        select_tab('payment','Payment methods');page.locator('[name=bank]').fill('UI Test Bank');page.locator('[name=name]').fill('UI QA');page.locator('[name=number]').fill('000');page.locator('[name=instructions]').fill('Test only');page.locator('[name=gcashName]').fill('QA GCash');page.locator('[name=gcashNumber]').fill('09123456789');page.locator('[name=gcashInstructions]').fill('QA only');page.get_by_text('Save payment options').click();saved();assert check.send('GET','/api/catalog')['paymentMethods']==['bank','gcash']
+        select_tab('payment','Payment methods');page.locator('[name=bank]').fill('UI Test Bank');page.locator('[name=name]').fill('UI QA');page.locator('[name=number]').fill('000');page.locator('[name=instructions]').fill('Test only');page.locator('[name=gcashName]').fill('QA GCash');page.locator('[name=gcashNumber]').fill('09123456789');page.locator('[name=gcashInstructions]').fill('QA only');page.get_by_role('button',name='Save bank details').click();saved();page.get_by_role('button',name='Save GCash details').click();saved();assert check.send('GET','/api/catalog')['paymentMethods']==['bank','gcash']
         # New booking in the real API then confirm/cancel using browser controls.
-        date=(server.today()+datetime.timedelta(days=4)).isoformat();cart={'rooms':[],'addons':[],'services':[{'id':'event-occasion','date':date,'time':'14:00','guests':5,'occasion':'UI QA'}],'guest':{'name':'UI Guest','email':'ui@example.test','phone':'000'},'paymentMethod':'bank'};v=check.send('POST','/api/bookings',cart,201);bid=v['booking']['id'];check.send('POST','/api/payment-reference',{'id':bid,'token':v['token'],'reference':'UI reference'})
-        select_tab('bookings','Reservations');page.locator('#booking-filter').select_option('payment_review');record=page.locator('details').filter(has_text=bid);record.locator('summary').click();expect(record).to_contain_text('UI reference');record.get_by_text('Confirm verified payment').click();expect(page.locator('#admin-message')).to_contain_text('Reservation status updated');record.locator('summary').click();record.get_by_text('Cancel reservation').click();expect(record.locator('summary')).to_contain_text('cancelled')
+        date=(server.today()+datetime.timedelta(days=4)).isoformat();cart={'rooms':[],'addons':[],'services':[{'id':'event-occasion','date':date,'time':'14:00','guests':5,'occasion':'UI QA'}],'guest':{'name':'UI Guest','email':'ui@example.test','phone':'000'},'paymentMethod':'bank'};v=check.send('POST','/api/bookings',cart,201);bid=v['booking']['id'];check.send('POST','/api/payment-receipt',{'id':bid,'token':v['token'],'data':base64.b64encode((ROOT/'public/assets/villas/inland-resort.webp').read_bytes()).decode()})
+        select_tab('bookings','Reservations');page.locator('#booking-filter').select_option('payment_review');record=page.locator('details').filter(has_text=bid);record.locator('summary').click();expect(record).to_contain_text('View full receipt image');record.get_by_text('Confirm verified payment').click();expect(page.locator('#admin-message')).to_contain_text('Reservation status updated');record.locator('summary').click();record.get_by_text('Cancel reservation').click();expect(record.locator('summary')).to_contain_text('cancelled')
         select_tab('messages','Contact messages');page.get_by_text('QA sender').click();expect(page.get_by_text('QA contact',exact=True)).to_be_visible()
         page.locator('#logout').click();expect(page.locator('#admin-login')).to_be_visible();page=open_page(page);expect(page.locator('#admin-login')).to_be_visible();assert not errors,errors
         # Public DOM consumes the saved catalog from the same API, without using the starter values.
