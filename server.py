@@ -1,4 +1,8 @@
 """AMORAP direct reservations. Python 3.10+; Supabase PostgreSQL backend."""
+import utils.session
+import utils.net
+import utils.clients
+import utils.http_session
 import os, sys, json, secrets, hashlib, hmac, mimetypes, re, time, base64, threading, traceback
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
@@ -16,8 +20,8 @@ ATTEMPTS={}; LOCK=threading.Lock(); HOLD_SECONDS=24*3600
 SESSION_SECONDS=24*3600
 SESSION_COOKIE="amorap_admin_v3"
 SESSION_RENEW_AFTER=3600
-ADMIN_VERSION="20261122-stable2"
-DASHBOARD_RELEASE="20261122-stable2"
+ADMIN_VERSION="20261122-adminpay3"
+DASHBOARD_RELEASE="20261122-adminpay3"
 PUBLIC_ORIGIN=os.environ.get("AMORA_PUBLIC_ORIGIN", "").rstrip("/")
 PREVIEW='--preview' in sys.argv
 SEED=json.loads((ROOT/'seed.json').read_text(encoding='utf-8'))
@@ -125,13 +129,23 @@ def payment_snapshot(config,method):
  return {'method':'bank','bank':config['bank'],'name':config['name'],'number':config['number'],'instructions':config.get('instructions','')}
 
 def validate_payment(v,previous=None):
+ if not isinstance(v,dict):raise APIError('Invalid payment settings.')
  previous=previous or {}
- fields=[('bank',150),('name',150),('number',150),('instructions',2000),('gcashName',150),('gcashNumber',40),('gcashInstructions',2000)]
- out={k:clean(v.get(k,previous.get(k,'')),limit) for k,limit in fields}
+ if not isinstance(previous,dict):raise APIError('Saved payment settings need repair.',503,'SETTING_INVALID')
+ method=v.get('method')
+ if method not in (None,'bank','gcash'):raise APIError('Choose GCash or local bank transfer.')
  bank_fields=('bank','name','number');gcash_fields=('gcashName','gcashNumber')
- if any(out[k] for k in bank_fields) and not all(out[k] for k in bank_fields):raise APIError('Complete all local bank account fields, or leave all three blank.')
- if any(out[k] for k in gcash_fields) and not all(out[k] for k in gcash_fields):raise APIError('Enter both the GCash account name and mobile number, or leave both blank.')
- if out['gcashNumber'] and not re.fullmatch(r'(?:09\d{9}|\+639\d{9})',out['gcashNumber']):raise APIError('Enter a valid GCash number, e.g. 09XXXXXXXXX or +639XXXXXXXXX.')
+ fields=[('bank',150),('name',150),('number',150),('instructions',2000),('gcashName',150),('gcashNumber',40),('gcashInstructions',2000)]
+ allowed={'bank','name','number','instructions'} if method=='bank' else {'gcashName','gcashNumber','gcashInstructions'} if method=='gcash' else {k for k,_ in fields}
+ # Saving either method leaves the other method and old reservations unchanged.
+ out={k:clean(v.get(k,previous.get(k,'')) if k in allowed else previous.get(k,''),limit) for k,limit in fields}
+ if method in (None,'bank') and any(out[k] for k in bank_fields) and not all(out[k] for k in bank_fields):raise APIError('Complete all local bank account fields, or clear all three to disable bank transfer.')
+ if method in (None,'gcash'):
+  out['gcashNumber']=re.sub(r'[\s()\-]','',out['gcashNumber'])
+  if re.fullmatch(r'639\d{9}',out['gcashNumber']):out['gcashNumber']='+'+out['gcashNumber']
+  if re.fullmatch(r'9\d{9}',out['gcashNumber']):out['gcashNumber']='0'+out['gcashNumber']
+  if any(out[k] for k in gcash_fields) and not all(out[k] for k in gcash_fields):raise APIError('Enter both the GCash account name and mobile number, or clear both to disable GCash.')
+  if out['gcashNumber'] and not re.fullmatch(r'(?:09\d{9}|\+639\d{9})',out['gcashNumber']):raise APIError('Enter a valid GCash number, e.g. 09XXXXXXXXX or +639XXXXXXXXX.')
  return out
 def today():return datetime.now(timezone(timedelta(hours=8))).date()
 def dates(a,b):
@@ -203,18 +217,22 @@ def quote(c,v):
  total=sum(x['total'] for x in lines+supplementary+service_lines)
  return {'checkin':a.isoformat() if a else None,'checkout':b.isoformat() if b else None,'nights':nights,'rooms':lines,'addons':supplementary,'services':service_lines,'total':total,'currency':'PHP'}
 
-def validate_photo_urls(c,images,max_images=15):
+def validate_photo_urls(c,images,max_images=15,existing_images=()):
  if not isinstance(images,list) or len(images)>max_images:raise APIError(f'Choose up to {max_images} photos.')
- seed_photos={im for room in SEED['rooms'] for im in room.get('images',[])}
+ seed_photos={im for section in ('rooms','services') for item in SEED.get(section,[]) for im in item.get('images',[])}
+ existing=set(existing_images or ())
  for url in images:
   if not isinstance(url,str):raise APIError('Invalid photo URL.')
-  if url in seed_photos and (PUBLIC/url.lstrip('/')).is_file():continue
-  if not re.fullmatch(r'/(?:uploads|api/photo)/[a-f0-9]{32}\.(jpg|png|webp)',url):raise APIError('Upload photos using the dashboard.')
+  # Vercel serves public assets separately from the Python function filesystem.
+  # Keep trusted bundled photos and photos already saved for this exact listing.
+  if url in seed_photos or url in existing:continue
+  if not re.fullmatch(r'/(?:uploads|api/photo)/[a-f0-9]{32}\.(jpg|png|webp)',url):raise APIError('Use Add pictures in this dashboard to upload new photos. Existing photos are preserved.')
   if not c.execute('SELECT 1 FROM amorap_booking.photos WHERE name=%s',(Path(url).name,)).fetchone():raise APIError('An uploaded photo is missing. Upload it again.')
  return images
 
 def validate_rooms(c,rows):
  if not isinstance(rows,list) or len(rows)>100:raise APIError('Invalid room list.')
+ previous={r['id']:r.get('images',[]) for r in get(c,'rooms') if isinstance(r,dict) and isinstance(r.get('id'),str)}
  result=[]; ids=set()
  for r in rows:
   if not isinstance(r,dict):raise APIError('Invalid villa.')
@@ -222,7 +240,7 @@ def validate_rooms(c,rows):
   if rid in ids:raise APIError('Duplicate villa ID.')
   ids.add(rid);amen=r.get('amenities',[]);imgs=r.get('images',[])
   if not isinstance(amen,list) or len(amen)>40:raise APIError('Invalid amenities.')
-  imgs=validate_photo_urls(c,imgs)
+  imgs=validate_photo_urls(c,imgs,existing_images=previous.get(rid,()))
   result.append({'id':rid,'name':clean(r.get('name'),120,True),'category':clean(r.get('category',''),100),'description':clean(r.get('description',''),3000),'price':amount(r.get('price')),'capacity':integer(r.get('capacity'),0,100),'inventory':integer(r.get('inventory'),0,1000),'bed':clean(r.get('bed',''),200),'size':clean(r.get('size',''),100),'policy':clean(r.get('policy',''),2000),'amenities':[clean(x,150,True) for x in amen],'images':imgs,'active':r.get('active') is True,'reviewed':r.get('reviewed',True) is True})
  return result
 
@@ -242,12 +260,13 @@ def service_enabled(r):return r.get('active') is True and r.get('reviewed') is T
 
 def validate_services(c,rows):
  if not isinstance(rows,list) or len(rows)>100:raise APIError('Invalid service list.')
+ previous={r['id']:r.get('images',[]) for r in get(c,'services') if isinstance(r,dict) and isinstance(r.get('id'),str)}
  result=[];ids=set()
  for r in rows:
   if not isinstance(r,dict):raise APIError('Invalid service.')
   sid=ident(r.get('id'));kind=r.get('kind')
   if sid in ids or kind not in ('event','dining'):raise APIError('Invalid or duplicate service.')
-  imgs=validate_photo_urls(c,r.get('images',[]),12)
+  imgs=validate_photo_urls(c,r.get('images',[]),12,existing_images=previous.get(sid,()))
   ids.add(sid);result.append({'id':sid,'kind':kind,'name':clean(r.get('name'),120,True),'description':clean(r.get('description',''),3000),'price':amount(r.get('price')),'capacity':integer(r.get('capacity'),0,1000),'images':imgs,'active':r.get('active') is True,'reviewed':r.get('reviewed') is True})
  return result
 
