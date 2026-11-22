@@ -6,7 +6,7 @@ const snapshot=x=>JSON.parse(JSON.stringify(x));
 const isSaved=(kind,id)=>committed[kind]?.some(item=>item.id===id)===true;
 const area=$('#admin-content');
 const AUTH_FAILURES=new Set(['SESSION_MISSING','SESSION_INVALID','SESSION_EXPIRED']);
-const ADMIN_VERSION='20261120-ratestable1';
+const ADMIN_VERSION='20261122-stable2';
 class RequestError extends Error{constructor(message,status=0,code=''){super(message);this.status=status;this.code=code}}
 const isSessionFailure=e=>e.status===401&&AUTH_FAILURES.has(e.code);
 async function request(p,method='GET',body,rev='',controller=new AbortController(),timeout=60000){
@@ -41,7 +41,7 @@ function notice(msg='',err=''){$('#admin-message').textContent=msg;$('#admin-err
 function authLoading(message,retry=false){$('#auth-loading').hidden=false;$('#auth-message').textContent=message;$('#retry-session').hidden=!retry;$('#admin-login').hidden=true;$('#dashboard').hidden=true;$('#logout').hidden=true;}
 function setBusy(value){busy=value;area.inert=value;$$('[data-tab]').forEach(b=>b.disabled=value);$('#logout').disabled=value;$('#login-form button').disabled=value;$('#retry-session').disabled=value;$('#dashboard').setAttribute('aria-busy',String(value));}
 async function run(fn){if(busy)return;heartbeatController?.abort();setBusy(true);try{await fn()}catch(x){if(!$('#dashboard').hidden)notice('',x.message);else if(!$('#admin-login').hidden&&x.status!==401)$('#login-error').textContent=x.message;}finally{setBusy(false)}}
-const DASHBOARD_RELEASE='20261120-ratestable1';
+const DASHBOARD_RELEASE='20261122-stable2';
 async function refresh(){const next=await api('data');if(!next||!next.revisions||!next.sectionErrors||next.release!==DASHBOARD_RELEASE)throw Error('Dashboard backend is outdated. Redeploy the API and website together.');for(const k of ['rooms','addons','services','bookings','messages'])if(!Array.isArray(next[k])&&!next.sectionErrors[k])throw Error('Dashboard data is incomplete. Retry loading.');if(!next.sectionErrors.payment&&(!next.payment||typeof next.payment!=='object'||Array.isArray(next.payment)))throw Error('Payment settings are incomplete.');for(const k of ['rooms','addons','services','payment'])if(!next.sectionErrors[k]&&typeof next.revisions[k]!=='string')throw Error('Missing revision for '+k+'.');model=next;dirty=false;for(const key of ['rooms','services','addons'])if(!next.sectionErrors?.[key])committed[key]=snapshot(next[key]);try{render()}catch(e){model.sectionErrors[tab]={error:'This section contains data the dashboard cannot display. Other sections remain available.',code:'DISPLAY_FORMAT_ERROR'};render()}}
 
 async function loadDashboard(){dashboard();if(dirty&&model){notice('Signed in again. Your unsaved edits are still here.');return;}if(!model)area.innerHTML='<p class="am-note">Loading dashboard…</p>';try{await refresh();notice()}catch(x){if($('#dashboard').hidden)return;if(!model)area.innerHTML='<p class="am-note">Your session is active, but dashboard data could not be loaded.</p><button class="am-secondary" data-refresh>Retry loading dashboard</button>';notice('',x.message)}}

@@ -16,8 +16,8 @@ ATTEMPTS={}; LOCK=threading.Lock(); HOLD_SECONDS=24*3600
 SESSION_SECONDS=24*3600
 SESSION_COOKIE="amorap_admin_v3"
 SESSION_RENEW_AFTER=3600
-ADMIN_VERSION="20261120-ratestable1"
-DASHBOARD_RELEASE="20261120-ratestable1"
+ADMIN_VERSION="20261122-stable2"
+DASHBOARD_RELEASE="20261122-stable2"
 PUBLIC_ORIGIN=os.environ.get("AMORA_PUBLIC_ORIGIN", "").rstrip("/")
 PREVIEW='--preview' in sys.argv
 SEED=json.loads((ROOT/'seed.json').read_text(encoding='utf-8'))
@@ -66,6 +66,24 @@ def get(c,k):
  except (ValueError,TypeError):raise APIError(f'The saved {k} settings are invalid. Contact support; existing data has not been changed.',500,'SETTING_INVALID')
  if k in SEED and not isinstance(value,type(SEED[k])):raise APIError(f'The saved {k} settings have an invalid format. Contact support; existing data has not been changed.',500,'SETTING_INVALID')
  return value
+def ensure_room_starters(c):
+ """One-time, non-destructive upgrade for old empty villa rates on Vercel."""
+ if c.execute("SELECT 1 FROM amorap_booking.settings WHERE key='starter_rates_runtime_v2'").fetchone():
+  return
+ rooms=get(c,'rooms')
+ defaults={r['id']:r for r in SEED['rooms']}
+ changed=False
+ for room in rooms:
+  default=defaults.get(room.get('id')) if isinstance(room,dict) else None
+  if default and room.get('price') is None:
+   room['price']=default['price']
+   if not room.get('capacity'):room['capacity']=default['capacity']
+   if not room.get('inventory'):room['inventory']=default['inventory']
+   room['reviewed']=False
+   changed=True
+ if changed:save(c,'rooms',rooms)
+ c.execute("INSERT INTO amorap_booking.settings (key,value) VALUES ('starter_rates_runtime_v2','true') ON CONFLICT (key) DO NOTHING")
+
 def save(c,k,v):c.execute('UPDATE amorap_booking.settings SET value=%s WHERE key=%s',(json.dumps(v,ensure_ascii=False),k))
 def revision(v):return hashlib.sha256(json.dumps(v,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
 
@@ -88,7 +106,7 @@ def ident(v):
  if not re.fullmatch('[a-zA-Z0-9_-]+',v):raise APIError('Invalid identifier.')
  return v
 
-def enabled(r):return (r.get('active',False) and r.get('reviewed',True) and r['price'] is not None and r['price']>0 and r['capacity']>0 and r['inventory']>0)
+def enabled(r):return (isinstance(r,dict) and r.get('active') is True and r.get('reviewed') is True and (r.get('price') or 0)>0 and (r.get('capacity') or 0)>0 and (r.get('inventory') or 0)>0)
 def payment_methods(p):
  """Configured manual-payment choices; never trust a browser-selected account."""
  if not isinstance(p,dict):return []
@@ -127,9 +145,21 @@ def expire_holds(c):
 
 def holding(c):
  expire_holds(c)
- return [decode_json(r['payload']) for r in c.execute("SELECT payload FROM amorap_booking.reservations WHERE status IN ('awaiting_payment','payment_review','confirmed')")]
+ records=[]
+ for r in c.execute("SELECT payload FROM amorap_booking.reservations WHERE status IN ('awaiting_payment','payment_review','confirmed')"):
+  payload=decode_json(r['payload'])
+  if not isinstance(payload,dict):raise APIError('Availability records require staff review. Please contact the resort.',503,'RESERVATION_FORMAT_ERROR')
+  if payload.get('checkin') and not isinstance(payload.get('rooms'),list):
+   raise APIError('Room availability could not be checked safely. Please contact the resort.',503,'RESERVATION_FORMAT_ERROR')
+  payload.setdefault('rooms',[])
+  payload.setdefault('services',[])
+  if not isinstance(payload['rooms'],list) or not isinstance(payload['services'],list) or any(not isinstance(item,dict) for item in payload['rooms']+payload['services']):
+   raise APIError('Availability records need staff review before further bookings.',503,'RESERVATION_FORMAT_ERROR')
+  records.append(payload)
+ return records
 
 def quote(c,v):
+ ensure_room_starters(c)
  selected=v.get('rooms',[]); services=v.get('services',[]); addons=v.get('addons',[])
  if not isinstance(selected,list) or len(selected)>30 or not isinstance(services,list) or len(services)>30 or not isinstance(addons,list) or len(addons)>30 or not (selected or services):raise APIError('Select a villa, dining or event reservation.')
  if addons and not selected:raise APIError('Stay extras require a villa reservation.')
@@ -225,6 +255,7 @@ def fallback_catalog():
  return {'rooms':[{**r,'bookable':False} for r in SEED['rooms'] if r['active']], 'addons':[], 'services':[{**r,'bookable':False} for r in SEED['services'] if r['active']], 'paymentReady':False,'paymentMethods':[],'fallback':True}
 
 def public_catalog(c):
+ ensure_room_starters(c)
  return {'rooms':[{**r,'bookable':enabled(r)} for r in get(c,'rooms') if r['active']], 'addons':[r for r in get(c,'addons') if r['active'] and r['price'] is not None], 'services':[{**r,'bookable':service_enabled(r)} for r in get(c,'services') if r['active']], 'paymentReady':payment_ready(get(c,'payment')),'paymentMethods':payment_methods(get(c,'payment'))}
 
 def remove_unreferenced_photos(c, images):
@@ -247,7 +278,14 @@ def guest(v):
  return out
 
 def booking_record(r):
- return {'id':r['id'],'status':r['status'],'created':r['created'],'expires':r['expires'],'reference':r['reference'],**decode_json(r['payload'])}
+ payload=decode_json(r['payload'])
+ if not isinstance(payload,dict):raise APIError('Invalid reservation payload.',500,'RESERVATION_FORMAT_ERROR')
+ record={'id':r['id'],'status':r['status'],'created':r['created'],'expires':r['expires'],'reference':r['reference'],**payload}
+ for key in ('rooms','addons','services'):
+  if key not in record:record[key]=[]
+ if isinstance(record.get('payment'),dict) and 'method' not in record['payment']:
+  record['payment']={**record['payment'],'method':'bank'}
+ return record
 
 def dashboard_error(section,e):
  ref=secrets.token_hex(5)
@@ -277,6 +315,7 @@ def admin_section(c,key):
  raise ValueError('Unknown dashboard section')
 
 def dashboard_data(c):
+ ensure_room_starters(c)
  # Each section has a savepoint: PostgreSQL aborts a transaction on SQL errors
  # until it is rolled back. A broken read cannot poison the remaining reads.
  payload={'revisions':{},'sectionErrors':{},'release':DASHBOARD_RELEASE}
@@ -417,6 +456,17 @@ class Handler(BaseHTTPRequestHandler):
      if not chunk:break
      self.wfile.write(chunk);left-=len(chunk)
  def api(self,method,path):
+  if path=='/api/health' and method=='GET':
+   # Readiness check without exposing credentials or SQL errors.
+   if PREVIEW:return self.respond({'ok':False,'mode':'preview','release':ADMIN_VERSION},503)
+   try:
+    with db(lock=False) as check:
+     for table in ('settings','reservations','messages','photos','admin_sessions'):
+      check.execute('SELECT 1 FROM amorap_booking.'+table+' LIMIT 1')
+   except (RuntimeError,psycopg.Error) as exc:
+    incomplete=getattr(exc,'sqlstate',None) in ('42P01','3F000')
+    return self.respond({'ok':False,'database':'schema_incomplete' if incomplete else 'unavailable','release':ADMIN_VERSION},503)
+   return self.respond({'ok':True,'database':'connected','schema':'present','release':ADMIN_VERSION})
   if path.startswith('/api/photo/') and method=='GET':return self.serve_photo(path.split('/')[-1])
   if PREVIEW:
    if path=='/api/catalog' and method=='GET':return self.respond({'rooms':[{**r,'bookable':False} for r in SEED['rooms'] if r['active']],'addons':[],'services':[{**r,'bookable':False} for r in SEED['services'] if r['active']],'paymentReady':False,'paymentMethods':[],'preview':True})
