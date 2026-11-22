@@ -134,7 +134,7 @@ function syncCustomerCare(){
   if(hours){hours.textContent=c.hours||'';hours.hidden=!c.hours}
   if(greeting){greeting.textContent=c.greeting||'';greeting.hidden=!c.greeting}
  }
- $('[data-support-call]').forEach(link=>{
+ $$('[data-support-call]').forEach(link=>{
   link.hidden=!valid;
   if(valid){link.href='tel:'+dial;link.setAttribute('aria-label','Call AMORAP customer care at '+phone);if(link.hasAttribute('data-support-number'))link.textContent=phone}
   else link.removeAttribute('href');
