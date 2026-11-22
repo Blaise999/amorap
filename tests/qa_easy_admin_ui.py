@@ -6,7 +6,7 @@ root=Path(__file__).resolve().parents[1]
 seed=json.loads((root/'seed.json').read_text())
 settings={**seed,'bookings':[],'messages':[],'revisions':{k:'r0' for k in ['rooms','addons','services','payment','support']},'sectionErrors':{},'release':'20261122-familycare1'}
 with sync_playwright() as p:
- browser=p.chromium.launch(executable_path=os.environ.get('QA_CHROMIUM','/usr/bin/chromium'),headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
+ browser=p.chromium.launch(executable_path=(os.environ.get('QA_CHROMIUM') or ('/usr/bin/chromium' if Path('/usr/bin/chromium').is_file() else None)),headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
  page=browser.new_page(viewport={'width':1300,'height':920});page.set_default_timeout(4500)
  errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
  html=(root/'public/admin/index.html').read_text();import re
@@ -67,6 +67,6 @@ with sync_playwright() as p:
  expect(page.get_by_role('button',name='Add service')).to_be_visible()
  assert not errors,errors
  page.get_by_role('button',name='Rooms & prices').click()
- page.screenshot(path='/mnt/data/amorap_admin_easy_preview.png',full_page=True)
+ page.screenshot(path='/tmp/amorap_admin_easy_preview.png',full_page=True)
  print('PASS Chromium simple admin: edit room rate, add new room/price, save bank + GCash, More sections navigation, no JS errors')
  browser.close()
