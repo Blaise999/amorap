@@ -1,4 +1,8 @@
 """AMORAP direct reservations. Python 3.10+; Supabase PostgreSQL backend."""
+import utils.session
+import utils.net
+import utils.clients
+import utils.http_session
 import os, sys, json, secrets, hashlib, hmac, mimetypes, re, time, base64, threading, traceback
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
