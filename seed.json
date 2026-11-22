@@ -103,7 +103,10 @@
     "bank": "",
     "name": "",
     "number": "",
-    "instructions": ""
+    "instructions": "",
+    "gcashName": "",
+    "gcashNumber": "",
+    "gcashInstructions": ""
   },
   "services": [
     {

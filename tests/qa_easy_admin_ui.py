@@ -4,7 +4,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright,expect
 root=Path(__file__).resolve().parents[1]
 seed=json.loads((root/'seed.json').read_text())
-settings={**seed,'bookings':[],'messages':[],'revisions':{k:'r0' for k in ['rooms','addons','services','payment']},'sectionErrors':{},'release':'20261120-ratestable1'}
+settings={**seed,'bookings':[],'messages':[],'revisions':{k:'r0' for k in ['rooms','addons','services','payment']},'sectionErrors':{},'release':'20261122-stable2'}
 with sync_playwright() as p:
  browser=p.chromium.launch(executable_path=os.environ.get('QA_CHROMIUM','/usr/bin/chromium'),headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
  page=browser.new_page(viewport={'width':1300,'height':920});page.set_default_timeout(4500)
@@ -13,7 +13,7 @@ with sync_playwright() as p:
  html=re.sub(r'<script[^>]*>.*?</script>','',html,flags=re.S);html=re.sub(r'<link[^>]*>','',html)
  page.set_content(html)
  page.add_style_tag(content=(root/'public/assets/styles/booking.css').read_text())
- page.evaluate('''(settings)=>{window.qa=JSON.parse(JSON.stringify(settings));window.requests=[];window.fetch=async(path,opts={})=>{let name=String(path).split('/').pop();let status=200,body={};if(name==='session'||name==='login')body={csrf:'mock',version:'20261120-ratestable1'};else if(name==='data')body=window.qa;else if(['rooms','addons','services','payment'].includes(name) && opts.method==='PUT'){let v=JSON.parse(opts.body);let next=name==='payment'?v:v.items;window.qa[name]=next;window.qa.revisions[name]='r'+window.requests.length;window.requests.push({name,value:next});body={value:next,revision:window.qa.revisions[name]};}else if(name==='upload')body={url:'/api/photo/0123456789abcdef0123456789abcdef.webp'};else if(name==='logout')body={};return new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}})}}''',settings)
+ page.evaluate('''(settings)=>{window.qa=JSON.parse(JSON.stringify(settings));window.requests=[];window.fetch=async(path,opts={})=>{let name=String(path).split('/').pop();let status=200,body={};if(name==='session'||name==='login')body={csrf:'mock',version:'20261122-stable2'};else if(name==='data')body=window.qa;else if(['rooms','addons','services','payment'].includes(name) && opts.method==='PUT'){let v=JSON.parse(opts.body);let next=name==='payment'?v:v.items;window.qa[name]=next;window.qa.revisions[name]='r'+window.requests.length;window.requests.push({name,value:next});body={value:next,revision:window.qa.revisions[name]};}else if(name==='upload')body={url:'/api/photo/0123456789abcdef0123456789abcdef.webp'};else if(name==='logout')body={};return new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}})}}''',settings)
  page.add_script_tag(content=(root/'public/assets/admin.js').read_text())
  expect(page.locator('#dashboard')).to_be_visible()
  expect(page.get_by_role('button',name='Rooms & prices')).to_be_visible()

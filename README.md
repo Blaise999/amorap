@@ -168,3 +168,12 @@ Uploads go through authenticated `/api/admin/upload` and are stored in the exist
 The Admin dashboard displays **Delete villa**, **Delete service**, and **Delete extra** buttons directly on each saved row. These are immediate, confirmed server-side deletions and do not require another **Save all** click. Individual gallery images have **Delete photo** buttons. Uploaded image bytes are removed from Supabase only when no other saved catalog item uses them. For unsaved content the button says **Discard draft**. Save or discard any other pending edits before an immediate deletion. Reservation history remains intact.
 
 For deletion API, photo upload and browser regression checks see `DELETE_AND_UPLOAD_QA.md` and `tests/qa_delete_now.py`. Existing tables are reused; no new SQL required.
+
+
+## November 2026 deployment and security fixes
+
+- Never commit `.env`. A previous version was tracked publicly and credentials stored in it must be rotated. Deleting the file from the current branch does not erase the historical commit.
+- Vercel routes `/api/*` through `api/index.py`. Use `GET /api/health` to verify that the connected Supabase schema is accessible without exposing its credentials.
+- Original villas with no saved price receive a one-time illustrative rate from `seed.json`. This is not published as a bookable room until a resort administrator has verified the rate, guest capacity and room inventory in the dashboard.
+- Existing admin-edited rates, bank details, reservations, and uploaded photos are not replaced by the migration.
+- The guest booking flow remains unavailable for rooms marked unreviewed, and manual payments must be configured by the hotel owner.
