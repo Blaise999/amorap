@@ -25,6 +25,8 @@ jobs:
           python -m playwright install chromium
       - name: Customer care and family editor browser checks
         run: python tests/qa_easy_admin_ui.py
+      - name: Guest booking and contact browser checks
+        run: python tests/qa_guest_family_ui.py
       - name: Admin and guest receipt API
         run: python tests/qa_admin.py
       - name: Family, pet rules, and customer support
