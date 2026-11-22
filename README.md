@@ -177,3 +177,12 @@ For deletion API, photo upload and browser regression checks see `DELETE_AND_UPL
 - Original villas with no saved price receive a one-time illustrative rate from `seed.json`. This is not published as a bookable room until a resort administrator has verified the rate, guest capacity and room inventory in the dashboard.
 - Existing admin-edited rates, bank details, reservations, and uploaded photos are not replaced by the migration.
 - The guest booking flow remains unavailable for rooms marked unreviewed, and manual payments must be configured by the hotel owner.
+
+
+### Payment receipts and first-come booking policy (November 2026)
+
+- Guest chooses a 50% deposit or 100% payment, transfers to the chosen local bank or GCash account, and uploads a JPG/PNG/WebP receipt image. Amounts are in PHP centavos. No transaction-reference field is requested for new bookings.
+- Receipt bytes are held in the existing `amorap_booking.photos` table with a separate `receipt-` prefix. They are **not** served via the public photo endpoint; only a signed-in admin can access `/api/admin/receipt/<reservation-id>`.
+- Unpaid requests don't hold inventory and don't have a promised 24-hour reservation hold. The admin must verify the receipt amount and current availability before confirming.
+- The exact booking policy is shown at checkout and the payment step: "Bookings are strictly first-come, first-served. A 50% or 100% payment is required to secure your reservation. Unpaid bookings are not confirmed and remain subject to availability".
+- Existing historical transfer references remain visible to admins; previously confirmed bookings are preserved. No new Supabase table or migration is needed.

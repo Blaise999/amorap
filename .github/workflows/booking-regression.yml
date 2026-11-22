@@ -1,0 +1,33 @@
+name: AMORAP booking and admin regression
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [feature/payment-receipts-policy-20261122]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - run: python -m pip install -r requirements.txt
+      - run: python -m compileall -q server.py api/index.py tests
+      - name: Guest and admin JavaScript syntax
+        run: node --check public/assets/site.js && node --check public/assets/admin.js
+      - name: Admin and guest receipt API
+        run: python tests/qa_admin.py
+      - name: Price and inventory API
+        run: python tests/qa_price_api.py
+      - name: Admin data resilience
+        run: python tests/qa_dashboard_recovery.py
+      - name: Image access and payment settings
+        run: python tests/qa_payment_photo_regression.py
+      - name: Photo uploads
+        run: python tests/qa_photo_uploads.py
+      - name: Admin deletion
+        run: python tests/qa_delete_now.py

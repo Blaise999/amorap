@@ -12,12 +12,12 @@ from dotenv import load_dotenv
 ROOT=Path(__file__).resolve().parent; PUBLIC=ROOT/'public'
 load_dotenv(ROOT/'.env')
 DATABASE_URL=os.environ.get('AMORAP_DATABASE_URL',''); USER=os.environ.get('AMORA_ADMIN_USER','admin'); PASSWORD=os.environ.get('AMORA_ADMIN_PASSWORD',''); SECURE=os.environ.get('AMORA_SECURE_COOKIE','0')=='1'
-ATTEMPTS={}; LOCK=threading.Lock(); HOLD_SECONDS=24*3600
+ATTEMPTS={}; LOCK=threading.Lock(); MAX_RECEIPT_BYTES=1_700_000
 SESSION_SECONDS=24*3600
 SESSION_COOKIE="amorap_admin_v3"
 SESSION_RENEW_AFTER=3600
-ADMIN_VERSION="20261122-adminpay3"
-DASHBOARD_RELEASE="20261122-adminpay3"
+ADMIN_VERSION="20261122-receipt1"
+DASHBOARD_RELEASE="20261122-receipt1"
 PUBLIC_ORIGIN=os.environ.get("AMORA_PUBLIC_ORIGIN", "").rstrip("/")
 PREVIEW='--preview' in sys.argv
 SEED=json.loads((ROOT/'seed.json').read_text(encoding='utf-8'))
@@ -151,12 +151,14 @@ def dates(a,b):
  return x,y
 
 def expire_holds(c):
- now=int(time.time());c.execute("UPDATE amorap_booking.reservations SET status='expired' WHERE status='awaiting_payment' AND expires<=%s",(now,))
+ # Pending bookings do not hold inventory or expire after a promised 24-hour window.
+ # Existing expired reservations stay expired; staff can cancel unpaid requests.
+ return None
 
 def holding(c):
  expire_holds(c)
  records=[]
- for r in c.execute("SELECT payload FROM amorap_booking.reservations WHERE status IN ('awaiting_payment','payment_review','confirmed')"):
+ for r in c.execute("SELECT payload FROM amorap_booking.reservations WHERE status='confirmed'"):
   payload=decode_json(r['payload'])
   if not isinstance(payload,dict):raise APIError('Availability records require staff review. Please contact the resort.',503,'RESERVATION_FORMAT_ERROR')
   if payload.get('checkin') and not isinstance(payload.get('rooms'),list):
@@ -292,10 +294,39 @@ def guest(v):
  if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',out['email']):raise APIError('Enter a valid email address.')
  return out
 
+def payment_percent(v):
+ percent=v.get('paymentPercent',100)
+ if type(percent) is not int or percent not in (50,100):
+  raise APIError('Choose a 50% deposit or full (100%) payment.')
+ return percent
+
+def payment_due(total,percent):
+ return (total*percent+99)//100
+
+def validate_receipt_image(encoded):
+ if not isinstance(encoded,str) or len(encoded)>3_000_000:raise APIError('Please upload a receipt image smaller than 1.7 MB.',413)
+ try:raw=base64.b64decode(encoded,validate=True)
+ except (ValueError,base64.binascii.Error):raise APIError('Could not read receipt image. Choose a JPG, PNG or WebP.')
+ if not raw or len(raw)>MAX_RECEIPT_BYTES:raise APIError('Receipt image is too large. Please choose or resize a photo below 1.7 MB.',413)
+ ext='jpg' if raw.startswith(b'\xff\xd8\xff') else 'png' if raw.startswith(b'\x89PNG\r\n\x1a\n') else 'webp' if raw[:4]==b'RIFF' and raw[8:12]==b'WEBP' else None
+ if not ext:raise APIError('Receipt must be a JPG, PNG or WebP image.')
+ return raw,ext,{'jpg':'image/jpeg','png':'image/png','webp':'image/webp'}[ext]
+
+def reservation_availability(c,payload):
+ # Re-check stock against confirmed reservations at admin confirmation time.
+ # Never rely on the availability observed when the guest created an unpaid request.
+ rooms=[{'id':x['id'],'qty':x['qty'],'guests':x['guests']} for x in payload.get('rooms',[])]
+ services=[{'id':x['id'],'date':x['date'],'time':x['time'],'guests':x['guests'],'occasion':x.get('occasion','')} for x in payload.get('services',[])]
+ addons=[{'id':x['id'],'qty':x['qty']} for x in payload.get('addons',[])]
+ return quote(c,{'rooms':rooms,'services':services,'addons':addons,'checkin':payload.get('checkin'),'checkout':payload.get('checkout')})
+
 def booking_record(r):
  payload=decode_json(r['payload'])
  if not isinstance(payload,dict):raise APIError('Invalid reservation payload.',500,'RESERVATION_FORMAT_ERROR')
  record={'id':r['id'],'status':r['status'],'created':r['created'],'expires':r['expires'],'reference':r['reference'],**payload}
+ record.setdefault('paymentPercent',100)
+ record.setdefault('dueNow',record.get('total',0))
+ record['hasReceipt']=bool(record.pop('receiptName',None))
  for key in ('rooms','addons','services'):
   if key not in record:record[key]=[]
  if isinstance(record.get('payment'),dict) and 'method' not in record['payment']:
@@ -502,6 +533,25 @@ class Handler(BaseHTTPRequestHandler):
    return self.respond({'csrf':csrf,'expiresAt':int(now)+SESSION_SECONDS,'version':ADMIN_VERSION},cookie=self.cookie(t,SESSION_SECONDS))
   if path.startswith('/api/admin/'):
    t,s=self.admin(method!='GET')
+   if path.startswith('/api/admin/receipt/') and method=='GET':
+    rid=ident(path.split('/')[-1])
+    with db(lock=False) as c:
+     row=c.execute('SELECT payload FROM amorap_booking.reservations WHERE id=%s',(rid,)).fetchone()
+     payload=decode_json(row['payload']) if row else {}
+     name=payload.get('receiptName','') if isinstance(payload,dict) else ''
+     if not re.fullmatch(r'receipt-[a-f0-9]{32}\.(jpg|png|webp)',name):raise APIError('Payment receipt not found.',404)
+     photo=c.execute('SELECT content,mime FROM amorap_booking.photos WHERE name=%s',(name,)).fetchone()
+    if not photo:raise APIError('Payment receipt not found.',404)
+    raw=bytes(photo['content'])
+    self.send_response(200)
+    self.send_header('Content-Type',photo['mime'])
+    self.send_header('Content-Length',str(len(raw)))
+    self.send_header('Cache-Control','private, no-store, max-age=0')
+    self.send_header('Vary','Cookie')
+    self.send_header('Content-Disposition','inline; filename="payment-receipt.'+name.rsplit('.',1)[1]+'"')
+    self.end_headers()
+    if self.command!='HEAD':self.wfile.write(raw)
+    return
    if path=='/api/admin/session' and method=='GET':
     now=int(time.time());expiry=s['expiry'];cookie=None
     if expiry<=now+SESSION_SECONDS-SESSION_RENEW_AFTER:
@@ -577,6 +627,12 @@ class Handler(BaseHTTPRequestHandler):
      if not r:raise APIError('Reservation not found.',404)
      transitions={'awaiting_payment':('confirmed','cancelled'),'payment_review':('confirmed','cancelled'),'confirmed':('cancelled',),'expired':(),'cancelled':()}
      if status not in transitions.get(r['status'],()):raise APIError('This status change is not permitted.')
+     if status=='confirmed':
+      payload=decode_json(r['payload'])
+      if not isinstance(payload,dict) or not (payload.get('receiptName') or r['reference']):
+       raise APIError('A payment receipt is required before confirmation.',409)
+      try:reservation_availability(c,payload)
+      except APIError as err:raise APIError('Cannot confirm this reservation: availability has changed. Contact the guest before taking payment action. '+str(err),409)
      c.execute('UPDATE amorap_booking.reservations SET status=%s WHERE id=%s',(status,rid));c.commit();return self.respond({'ok':True,'booking':booking_record({**r,'status':status})})
    raise APIError('Not found.',404)
   with db() as c:
@@ -588,20 +644,33 @@ class Handler(BaseHTTPRequestHandler):
     if not payment_ready(p):raise APIError('Direct payment is not configured yet. Please contact the resort.',409)
     q=quote(c,v)
     if v.get('expectedTotal') is not None and v['expectedTotal']!=q['total']:raise APIError('The price has changed. Return to checkout to review the updated total.',409)
-    rid='AM-'+secrets.token_hex(5).upper();token=secrets.token_urlsafe(32);now=int(time.time());payload={**q,'guest':person,'payment':payment_snapshot(p,v.get('paymentMethod'))}
-    expires=min([now+HOLD_SECONDS]+[int(datetime.fromisoformat(l['date']+'T'+l['time']+':00+08:00').timestamp()) for l in q['services']])
-    if expires<=now:raise APIError('Choose a future reservation time.')
+    percent=payment_percent(v)
+    rid='AM-'+secrets.token_hex(5).upper();token=secrets.token_urlsafe(32);now=int(time.time())
+    payload={**q,'guest':person,'payment':payment_snapshot(p,v.get('paymentMethod')),'paymentPercent':percent,'dueNow':payment_due(q['total'],percent)}
+    # 0 means no inventory hold or promised expiry; payment must be verified by staff.
+    expires=0
     c.execute('INSERT INTO amorap_booking.reservations (id,token,status,created,expires,payload,reference) VALUES(%s,%s,%s,%s,%s,%s,%s)',(rid,token_hash(token),'awaiting_payment',now,expires,json.dumps(payload,ensure_ascii=False),''));c.commit()
     return self.respond({'booking':{'id':rid,'status':'awaiting_payment','expires':expires,**payload},'token':token},201)
    if path=='/api/booking-status' and method=='POST':
     v=self.body();rid=ident(v.get('id'));token=clean(v.get('token',''),100,True);holding(c);r=c.execute('SELECT * FROM amorap_booking.reservations WHERE id=%s',(rid,)).fetchone()
     if not r or not hmac.compare_digest(token_hash(token),r['token']):raise APIError('Reservation not found.',404)
     return self.respond({'booking':booking_record(r)})
-   if path=='/api/payment-reference' and method=='POST':
-    v=self.body();rid=ident(v.get('id'));token=clean(v.get('token',''),100,True);ref=clean(v.get('reference',''),200,True);holding(c);r=c.execute('SELECT * FROM amorap_booking.reservations WHERE id=%s',(rid,)).fetchone()
+   if path=='/api/payment-receipt' and method=='POST':
+    v=self.body();rid=ident(v.get('id'));token=clean(v.get('token',''),100,True)
+    r=c.execute('SELECT * FROM amorap_booking.reservations WHERE id=%s',(rid,)).fetchone()
     if not r or not hmac.compare_digest(token_hash(token),r['token']):raise APIError('Reservation not found.',404)
-    if r['status']!='awaiting_payment':raise APIError('This reservation is not awaiting payment.',409)
-    c.execute("UPDATE amorap_booking.reservations SET status='payment_review', reference=%s WHERE id=%s",(ref,rid));c.commit();return self.respond({'ok':True})
+    if r['status'] not in ('awaiting_payment','payment_review'):raise APIError('This reservation can no longer accept receipts.',409)
+    raw,ext,mime=validate_receipt_image(v.get('data'))
+    payload=decode_json(r['payload'])
+    if not isinstance(payload,dict):raise APIError('Reservation data is invalid.',503)
+    old=payload.get('receiptName','')
+    name='receipt-'+secrets.token_hex(16)+'.'+ext
+    c.execute('INSERT INTO amorap_booking.photos(name,mime,content) VALUES(%s,%s,%s)',(name,mime,raw))
+    payload['receiptName']=name;payload['receiptSubmittedAt']=int(time.time())
+    c.execute("UPDATE amorap_booking.reservations SET status='payment_review',payload=%s,reference='' WHERE id=%s",(json.dumps(payload,ensure_ascii=False),rid))
+    if re.fullmatch(r'receipt-[a-f0-9]{32}\.(jpg|png|webp)',old):
+     c.execute('DELETE FROM amorap_booking.photos WHERE name=%s',(old,))
+    c.commit();return self.respond({'ok':True,'status':'payment_review'})
    if path=='/api/contact' and method=='POST':
     v=self.body();p={'name':clean(v.get('name',''),150,True),'email':clean(v.get('email',''),200,True),'message':clean(v.get('message',''),3000,True)}
     if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',p['email']):raise APIError('Enter a valid email address.')
