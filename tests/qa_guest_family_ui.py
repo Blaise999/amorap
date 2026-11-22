@@ -19,6 +19,8 @@ with sync_playwright() as p:
   html=re.sub(r'<script[^>]*>.*?</script>','',html,flags=re.S)
   html=re.sub(r'<link[^>]*>','',html)
   page.set_content(html)
+  page.add_style_tag(content=(root/'public/assets/styles/original.css').read_text())
+  page.add_style_tag(content=(root/'public/assets/styles/booking.css').read_text())
   page.evaluate("""(catalog)=>{
     window.qaSent=[];
     window.fetch=async(url,opts={})=>{
