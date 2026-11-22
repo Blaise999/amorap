@@ -44,7 +44,7 @@ with sync_playwright() as p:
  saved_room=page.evaluate('window.qa.rooms.at(-1)')
  assert saved_room['name']=='QA New Family Room' and saved_room['price']==899900 and saved_room['inventory']==2,saved_room
  page.get_by_role('button',name='Customer care').click()
- expect(page.get_by_text('Contact details')).to_be_visible()
+ expect(page.get_by_role('heading',name='Contact details')).to_be_visible()
  page.locator('[name=phone]').fill('+63 912 345 6789')
  page.locator('[name=hours]').fill('Everyday 8am-8pm')
  page.get_by_role('button',name='Save customer care').click()
