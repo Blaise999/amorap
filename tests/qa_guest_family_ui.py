@@ -6,7 +6,7 @@ root=Path(__file__).resolve().parents[1]
 seed=json.loads((root/'seed.json').read_text())
 catalog={**seed,'rooms':[{**r,'reviewed':True,'bookable':True,'active':True} for r in seed['rooms']],
  'addons':[],'services':[],'paymentReady':True,'paymentMethods':['bank','gcash'],
- 'support':{'phone':'+63 912 345 6789','email':'care@example.test','hours':'Mon-Sun 8am-8pm','greeting':'How may we help?'}}
+ 'support':{'phone':'+63 912 345 6789','dialPhone':'+639123456789','email':'care@example.test','resortAddress':'QA Resort Road','officeAddress':'QA Main Office','hours':'Mon-Sun 8am-8pm','greeting':'How may we help?'}}
 catalog['rooms'][0].update(petsAllowed=True,maxPets=2,petFee=35000,petPolicy='House-trained pets only',inventory=3)
 with sync_playwright() as p:
  chrome=(os.environ.get('QA_CHROMIUM') or ('/usr/bin/chromium' if Path('/usr/bin/chromium').is_file() else None))
@@ -43,7 +43,11 @@ with sync_playwright() as p:
 
  contact=context.new_page()
  prepare(contact,'contact')
- expect(contact.locator('#am-customer-call')).to_have_attribute('href','tel:+639123456789')
+ expect(contact.locator('.am-chat-toggle')).to_be_visible()
+ expect(contact.locator('#am-customer-call')).to_have_count(0)
+ expect(contact.locator('[data-support-call]').first).to_have_attribute('href','tel:+639123456789')
+ expect(contact.locator('[data-support-address]')).to_have_text('QA Resort Road')
+ expect(contact.locator('[data-support-office]')).to_have_text('QA Main Office')
  expect(contact.locator('[data-support-email]')).to_contain_text('care@example.test')
  contact.get_by_role('button',name='Open live chat').click()
  expect(contact.locator('.am-chat-panel')).to_be_visible()
