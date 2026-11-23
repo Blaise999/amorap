@@ -7,7 +7,7 @@ seed=json.loads((root/'seed.json').read_text())
 catalog={**seed,'rooms':[{**r,'reviewed':True,'bookable':True,'active':True} for r in seed['rooms']],
  'addons':[],'services':[],'paymentReady':True,'paymentMethods':['bank','gcash'],
  'support':{'phone':'+63 912 345 6789','email':'care@example.test','hours':'Mon-Sun 8am-8pm','greeting':'How may we help?'}}
-catalog['rooms'][0].update(petsAllowed=True,maxPets=2,petFee=35000,petPolicy='House-trained pets only')
+catalog['rooms'][0].update(petsAllowed=True,maxPets=2,petFee=35000,petPolicy='House-trained pets only',inventory=3)
 with sync_playwright() as p:
  chrome=(os.environ.get('QA_CHROMIUM') or ('/usr/bin/chromium' if Path('/usr/bin/chromium').is_file() else None))
  browser=p.chromium.launch(executable_path=chrome,headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
@@ -26,6 +26,11 @@ with sync_playwright() as p:
     window.fetch=async(url,opts={})=>{
       const route=String(url).split('?')[0];
       if(route==='/api/catalog')return new Response(JSON.stringify(catalog),{status:200,headers:{'Content-Type':'application/json'}});
+      if(route==='/api/availability'){
+        const dates=new URL(String(url),'https://amorap.test').searchParams;
+        const rooms=catalog.rooms.map((r,i)=>({id:r.id,totalRooms:r.inventory,available:i===1?0:r.inventory,bookable:i!==1&&r.bookable}));
+        return new Response(JSON.stringify({checkin:dates.get('checkin'),checkout:dates.get('checkout'),rooms}),{status:200,headers:{'Content-Type':'application/json'}});
+      }
       if(route==='/api/contact'){window.qaSent.push(JSON.parse(opts.body));return new Response(JSON.stringify({ok:true}),{status:201,headers:{'Content-Type':'application/json'}})}
       return new Response(JSON.stringify({error:'not mocked'}),{status:404,headers:{'Content-Type':'application/json'}});
     };
@@ -49,9 +54,13 @@ with sync_playwright() as p:
  expect(booking.locator('#am-dates-form')).to_be_visible()
  booking.get_by_role('button',name=re.compile('Continue to villas')).click()
  expect(booking.locator('#am-content [data-room="inland-single"]')).to_be_visible()
+ expect(booking.locator('#am-content .am-room-stock').first).to_contain_text('3 rooms available for selected dates')
+ expect(booking.locator('#am-content [data-room="inland-double"]')).to_be_disabled()
+ assert '0 rooms available' in booking.locator('#am-content').inner_text()
  booking.locator('#am-content [data-room="inland-single"]').click()
  expect(booking.locator('#am-stay-form')).to_be_visible()
  assert 'under 12' in booking.locator('#am-stay-form').inner_text()
+ expect(booking.locator('#am-stay-form [name=qty]')).to_have_attribute('max','3')
  expect(booking.locator('#am-stay-form [name=kids]')).to_have_attribute('max','2')
  expect(booking.locator('#am-stay-form [name=pets]')).to_have_attribute('max','2')
  booking.locator('#am-stay-form [name=qty]').fill('2')

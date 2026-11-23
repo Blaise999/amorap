@@ -186,3 +186,11 @@ For deletion API, photo upload and browser regression checks see `DELETE_AND_UPL
 - Unpaid requests don't hold inventory and don't have a promised 24-hour reservation hold. The admin must verify the receipt amount and current availability before confirming.
 - The exact booking policy is shown at checkout and the payment step: "Bookings are strictly first-come, first-served. A 50% or 100% payment is required to secure your reservation. Unpaid bookings are not confirmed and remain subject to availability".
 - Existing historical transfer references remain visible to admins; previously confirmed bookings are preserved. No new Supabase table or migration is needed.
+
+
+### Live room availability per villa type (November 2026)
+
+- **Admin → Rooms & prices → Total rooms of this type (inventory)** controls stock for each villa type independently. Setting 0 prevents new bookings. No SQL migration is required.
+- Public villa pages display total rooms per type (not a misleading date-independent availability claim). After the guest selects check-in/check-out, the booking cards and room editor display the **remaining number available across every night of that stay**.
+- `GET /api/availability?checkin=YYYY-MM-DD&checkout=YYYY-MM-DD` computes date-specific remaining quantities by subtracting only **confirmed** overlapping reservations. Unpaid/receipt-review requests do not reserve inventory, consistent with the first-come booking policy. The counts are informational and not a guarantee; the server recalculates availability at checkout and admin confirmation.
+- A sold-out room type is visibly marked and its booking action disabled for those dates; the quantity selector never allows more than the last verified count. Availability errors are not silently replaced by invented room counts.
