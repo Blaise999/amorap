@@ -130,3 +130,7 @@
 .am-family-editor{background:#f7fbf7;border:1px solid #d8e5d9;padding:18px;margin:16px 0}
 .am-family-editor h3{margin:0 0 8px}
 @media(max-width:560px){.am-call-fab{right:12px;bottom:12px;padding:11px 14px;font-size:12px}}
+
+/* Dynamic room inventory: total units before dates, live remaining units after dates. */
+.am-room-stock{padding:9px 12px;margin:12px 0;border:1px solid #bed7c5;border-radius:8px;background:#f1faf3;color:#245338;font-size:13px;font-weight:700;line-height:1.4}
+.am-room-stock.is-soldout{border-color:#e4b6b6;background:#fff2f2;color:#8e3434}
