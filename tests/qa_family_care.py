@@ -43,8 +43,14 @@ with tempfile.TemporaryDirectory() as tmp:
   assert guest.send('GET','/api/catalog')['rooms'][1]['freeChildUnderAge']==10
   admin.save('support',{'phone':'javascript:alert(1)','email':''},dashboard['revisions']['support'],400)
   support={'phone':'+63 912 345 6789','email':'care@example.test','hours':'Every day, 8am-8pm','greeting':'How can we help?'}
+  support.update(dialPhone='+639123456789',resortAddress='QA Beach Road, Philippines',officeAddress='QA Head Office, Manila')
   admin.save('support',support,dashboard['revisions']['support'])
-  assert guest.send('GET','/api/catalog')['support']==support
+  published=guest.send('GET','/api/catalog')['support']
+  assert all(published[k]==v for k,v in support.items()),published
+  assert published['dialPhone']=='+639123456789'
+  assert published['resortAddress']=='QA Beach Road, Philippines'
+  assert published['officeAddress']=='QA Head Office, Manila'
+
   guest.send('POST','/api/contact',{'name':'QA Customer','email':'customer@example.test','phone':'+63 912 345 6789','message':'Can I bring my dog?'},201)
   msg=admin.get()['messages'][0]
   assert msg['phone']==support['phone'] and 'dog' in msg['message']

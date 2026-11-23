@@ -3,7 +3,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [feature/payment-receipts-policy-20261122, feature/kids-pets-customer-care-20261122, fix/live-room-availability-20261123]
+    branches: [feature/payment-receipts-policy-20261122, feature/kids-pets-customer-care-20261122, fix/live-room-availability-20261123, fix/contact-admin-live-chat-20261123]
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -31,6 +31,8 @@ jobs:
         run: python tests/qa_admin.py
       - name: Date-scoped remaining room inventory
         run: python tests/qa_room_availability.py
+      - name: Live chat security, support and admin replies
+        run: python tests/qa_live_chat.py
       - name: Family, pet rules, and customer support
         run: python tests/qa_family_care.py
       - name: Price and inventory API

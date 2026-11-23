@@ -194,3 +194,14 @@ For deletion API, photo upload and browser regression checks see `DELETE_AND_UPL
 - Public villa pages display total rooms per type (not a misleading date-independent availability claim). After the guest selects check-in/check-out, the booking cards and room editor display the **remaining number available across every night of that stay**.
 - `GET /api/availability?checkin=YYYY-MM-DD&checkout=YYYY-MM-DD` computes date-specific remaining quantities by subtracting only **confirmed** overlapping reservations. Unpaid/receipt-review requests do not reserve inventory, consistent with the first-come booking policy. The counts are informational and not a guarantee; the server recalculates availability at checkout and admin confirmation.
 - A sold-out room type is visibly marked and its booking action disabled for those dates; the quantity selector never allows more than the last verified count. Availability errors are not silently replaced by invented room counts.
+
+
+## Editable contact details and guest-to-admin live chat (2026-11-23)
+
+- **Admin → Customer care** is the source of truth for the phone number as displayed, a separate tap-to-call number, support email, resort address, optional head-office address, opening hours and greeting. Saving publishes the values on the public Contacts page and footer. Clearing a phone number/address removes the corresponding public contact information.
+- The old large fixed **Call customer care** button has been removed. Regular phone links remain available on Contact and in the footer when an administrator supplies a valid number.
+- A small **💬 Live Chat** button appears on guest pages. Opening it displays a compact, collapsible conversation. It is hidden while the reservation modal is open, so it cannot cover date fields, pricing or checkout actions.
+- **Admin → Live chat** receives guest conversations and can send replies, close/reopen threads and view optional guest email. Both guest and admin clients poll for updates approximately every 8 seconds; this is near-real-time chat, not a guarantee of instant human response or WebSocket push notifications.
+- Guest conversations use random 256-bit browser-held bearer tokens, stored only as a SHA-256 hash server-side; the guest token is required for reading or sending messages and never returned in the public catalog. Admin routes require the existing signed-in session and CSRF token to reply or change chat status.
+- Chat messages are stored in the existing amorap_booking.messages table as distinct kind: chat payloads; traditional Contact form submissions remain separate. Existing messages and bookings are preserved. No SQL migration or database reset is required.
+- Safeguards include server-side limits for message length and conversation length, basic creation rate limiting, HTML escaping in both UIs, and no-store responses. For exceptionally high traffic a shared edge rate limiter may still be useful.

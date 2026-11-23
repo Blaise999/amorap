@@ -123,14 +123,42 @@
 .am-checkout-price{margin-bottom:1.2rem;}
 .am-room-heading [data-price-preview]{font-variant-numeric:tabular-nums;}
 
-/* Guest-facing, admin-configured customer care telephone shortcut */
-.am-call-fab{position:fixed;right:20px;bottom:20px;z-index:1500;display:inline-flex;align-items:center;justify-content:center;min-height:46px;padding:12px 19px;border-radius:28px;background:#234735;color:#fff;font:600 13px/1.2 system-ui,sans-serif;box-shadow:0 8px 24px #0002;text-decoration:none;max-width:calc(100vw - 36px)}
-.am-call-fab:hover,.am-call-fab:focus-visible{background:#163126;color:#fff}
-.am-call-fab[hidden],[data-support-call][hidden]{display:none!important}
-.am-family-editor{background:#f7fbf7;border:1px solid #d8e5d9;padding:18px;margin:16px 0}
-.am-family-editor h3{margin:0 0 8px}
-@media(max-width:560px){.am-call-fab{right:12px;bottom:12px;padding:11px 14px;font-size:12px}}
 
-/* Dynamic room inventory: total units before dates, live remaining units after dates. */
-.am-room-stock{padding:9px 12px;margin:12px 0;border:1px solid #bed7c5;border-radius:8px;background:#f1faf3;color:#245338;font-size:13px;font-weight:700;line-height:1.4}
-.am-room-stock.is-soldout{border-color:#e4b6b6;background:#fff2f2;color:#8e3434}
+/* Compact guest/live support widget: never overlays the booking dialog. */
+.am-live-chat{position:fixed;z-index:180;bottom:calc(12px + env(safe-area-inset-bottom,0px));right:12px;font:14px/1.4 system-ui,sans-serif;color:#22382a}
+.am-chat-toggle{width:48px;height:48px;display:grid;place-items:center;margin-left:auto;border:0;border-radius:50%;background:#234735;color:white;font-size:23px;cursor:pointer;box-shadow:0 4px 18px #0003}
+.am-chat-toggle:hover,.am-chat-toggle:focus-visible,.am-chat-send:hover{background:#356d4c}
+.am-chat-panel{position:absolute;right:0;bottom:calc(100% + 10px);width:min(350px,calc(100vw - 24px));height:min(480px,69dvh);min-height:280px;background:#fff;border:1px solid #d9e2d9;border-radius:14px;box-shadow:0 14px 40px #0004;overflow:hidden;display:flex;flex-direction:column}
+.am-chat-panel[hidden],.am-chat-form[hidden],.am-chat-new[hidden],.am-chat-identity[hidden],.am-chat-error[hidden]{display:none!important}
+.am-chat-header{background:#234735;color:#fff;padding:13px 15px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none}
+.am-chat-header strong,.am-chat-header small{display:block}.am-chat-header small{font-size:11px;color:#e0f2e3}.am-chat-close{border:0;color:#fff;background:transparent;font-size:25px;cursor:pointer;width:35px;height:35px}
+.am-chat-messages{padding:12px;overflow:auto;flex:1;min-height:60px;overscroll-behavior:contain}
+.am-chat-hint{font-size:13px;color:#5a675c}
+.am-chat-message{max-width:93%;padding:9px 12px;margin:8px 0;border-radius:10px;background:#eff2f0;color:#18311c;white-space:pre-wrap;word-break:break-word}
+.am-chat-message.is-guest{background:#e1f2e4;margin-left:auto}.am-chat-message small{display:block;font-size:11px;font-weight:700;color:#3b6550}.am-chat-message p{margin:4px 0 0;font-size:13px}
+.am-chat-error{color:#9b3131;background:#fff3f3;font-size:12px;padding:7px 11px}
+.am-chat-form{border-top:1px solid #e5e8e5;padding:10px;flex:none}.am-chat-identity{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px}
+.am-chat-form label{font-size:11px;font-weight:600;color:#334634;display:block}
+.am-chat-form input,.am-chat-form textarea{display:block;box-sizing:border-box;width:100%;padding:9px;border:1px solid #cad6cc;border-radius:7px;margin-top:3px;font:13px system-ui;background:#fff;color:#142c1a}
+.am-chat-form textarea{resize:vertical;min-height:50px;max-height:110px}.am-chat-send,.am-chat-new{width:100%;background:#234735;color:#fff;border:0;border-radius:8px;padding:10px;margin-top:8px;font-weight:700;cursor:pointer}
+.am-chat-send:disabled{opacity:.5;cursor:wait}
+.am-site-contact-inline{display:flex;gap:12px 22px;flex-wrap:wrap;align-items:center;justify-content:center;background:#1f2f23;color:#e6e6de;font-size:12px;padding:16px 20px;text-align:center}
+.am-site-contact-inline a{color:#e6e6de;text-decoration:underline;text-underline-offset:3px}
+[data-support-call][hidden],[data-support-office-block][hidden],[data-support-address-block][hidden]{display:none!important}
+/* Booking date selectors and submit buttons take precedence over chat. */
+body:has(.am-modal:not([hidden])) .am-live-chat{display:none!important}
+@media(max-width:600px){.am-live-chat{right:10px;bottom:calc(10px + env(safe-area-inset-bottom,0px))}.am-chat-toggle{width:44px;height:44px}.am-chat-panel{height:min(430px,63dvh)}}
+
+/* Private administrator chat inbox and reply composer. */
+.am-admin-chat-layout{display:grid;grid-template-columns:minmax(190px,280px) minmax(0,1fr);gap:16px;align-items:start}
+.am-chat-thread-list{max-height:520px;overflow:auto}.am-chat-thread-list h3{font-weight:700}
+.am-chat-thread-item{display:flex;flex-direction:column;gap:4px;width:100%;padding:12px;margin:7px 0;border:1px solid #d3ded5;border-radius:8px;text-align:left;background:#fff;color:#243b28;cursor:pointer}
+.am-chat-thread-item.selected{background:#e4f1e7;border-color:#508a61}
+.am-chat-thread-item small{font-size:12px;color:#4f6554}
+.am-chat-conversation{min-width:0}
+.am-admin-chat-messages{height:min(45vh,400px);min-height:175px;overflow:auto;border:1px solid #dbe5de;padding:12px;margin:12px 0;background:#fbfdfb}
+.am-admin-chat-message{max-width:88%;padding:10px;border-radius:9px;background:#f0f3f0;white-space:pre-wrap;overflow-wrap:anywhere;margin-bottom:10px}
+.am-admin-chat-message.is-staff{margin-left:auto;background:#dff2e3}
+.am-admin-chat-message small{font-size:11px;color:#4c7657}.am-admin-chat-message p{margin:5px 0}
+.am-chat-conversation .am-secondary{margin-top:8px}
+@media(max-width:650px){.am-admin-chat-layout{grid-template-columns:1fr}.am-chat-thread-list{max-height:180px}.am-admin-chat-messages{height:260px}}

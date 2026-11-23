@@ -31,6 +31,9 @@ with sync_playwright() as p:
         const rooms=catalog.rooms.map((r,i)=>({id:r.id,totalRooms:r.inventory,available:i===1?0:r.inventory,bookable:i!==1&&r.bookable}));
         return new Response(JSON.stringify({checkin:dates.get('checkin'),checkout:dates.get('checkout'),rooms}),{status:200,headers:{'Content-Type':'application/json'}});
       }
+      if(route==='/api/chat/start'){const v=JSON.parse(opts.body);window.mockChat={id:77,status:'open',guestName:v.name||'Guest',updated:1000,messages:[{role:'guest',text:v.message,at:1000}]};return new Response(JSON.stringify({chat:window.mockChat,token:'a'.repeat(43)}),{status:201,headers:{'Content-Type':'application/json'}});}
+      if(route==='/api/chat/poll'){if(!window.mockChat.messages.some(m=>m.role==='admin'))window.mockChat.messages.push({role:'admin',text:'Hello from AMORAP staff',at:1001});return new Response(JSON.stringify({chat:window.mockChat}),{status:200,headers:{'Content-Type':'application/json'}});}
+      if(route==='/api/chat/send'){const v=JSON.parse(opts.body);window.mockChat.messages.push({role:'guest',text:v.message,at:1002});return new Response(JSON.stringify({chat:window.mockChat}),{status:200,headers:{'Content-Type':'application/json'}});}
       if(route==='/api/contact'){window.qaSent.push(JSON.parse(opts.body));return new Response(JSON.stringify({ok:true}),{status:201,headers:{'Content-Type':'application/json'}})}
       return new Response(JSON.stringify({error:'not mocked'}),{status:404,headers:{'Content-Type':'application/json'}});
     };
@@ -42,6 +45,16 @@ with sync_playwright() as p:
  prepare(contact,'contact')
  expect(contact.locator('#am-customer-call')).to_have_attribute('href','tel:+639123456789')
  expect(contact.locator('[data-support-email]')).to_contain_text('care@example.test')
+ contact.get_by_role('button',name='Open live chat').click()
+ expect(contact.locator('.am-chat-panel')).to_be_visible()
+ contact.locator('.am-chat-panel [name=name]').fill('QA chatter')
+ contact.locator('.am-chat-panel [name=message]').fill('Can you help?')
+ contact.locator('.am-chat-panel').get_by_role('button',name='Send message').click()
+ expect(contact.locator('.am-chat-message.is-guest')).to_contain_text('Can you help?')
+ contact.get_by_role('button',name='Close chat').click()
+ contact.get_by_role('button',name='Open live chat').click()
+ expect(contact.locator('.am-chat-message.is-staff')).to_contain_text('Hello from AMORAP staff')
+ contact.get_by_role('button',name='Close chat').click()
  contact.locator('#contact-form [name=name]').fill('QA Guest')
  contact.locator('#contact-form [name=email]').fill('guest@example.test')
  contact.locator('#contact-form [name=phone]').fill('+63 912 123 4567')
@@ -52,6 +65,7 @@ with sync_playwright() as p:
  booking=context.new_page()
  prepare(booking,'booking')
  expect(booking.locator('#am-dates-form')).to_be_visible()
+ expect(booking.locator('.am-live-chat')).to_be_hidden() # chat never covers booking drawer
  booking.get_by_role('button',name=re.compile('Continue to villas')).click()
  expect(booking.locator('#am-content [data-room="inland-single"]')).to_be_visible()
  expect(booking.locator('#am-content .am-room-stock').first).to_contain_text('3 rooms available for selected dates')
