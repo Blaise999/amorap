@@ -6,7 +6,7 @@ from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit, unquote
+from urllib.parse import urlsplit, unquote, parse_qs
 from http.cookies import SimpleCookie, CookieError
 import psycopg
 from psycopg.rows import dict_row
@@ -18,8 +18,8 @@ ATTEMPTS={}; LOCK=threading.Lock(); MAX_RECEIPT_BYTES=1_700_000
 SESSION_SECONDS=24*3600
 SESSION_COOKIE="amorap_admin_v3"
 SESSION_RENEW_AFTER=3600
-ADMIN_VERSION="20261122-familycare1"
-DASHBOARD_RELEASE="20261122-familycare1"
+ADMIN_VERSION="20261123-stock1"
+DASHBOARD_RELEASE="20261123-stock1"
 PUBLIC_ORIGIN=os.environ.get("AMORA_PUBLIC_ORIGIN", "").rstrip("/")
 PREVIEW='--preview' in sys.argv
 SEED=json.loads((ROOT/'seed.json').read_text(encoding='utf-8'))
@@ -202,6 +202,38 @@ def holding(c):
   records.append(payload)
  return records
 
+def available_room_count(room,booked,start,end):
+ """Smallest number of free rooms across every night in the requested stay.
+
+ Only CONFIRMED reservations reserve inventory. Pending/receipt-review
+ requests remain first-come, first-served.
+ """
+ remaining=integer(room.get('inventory',0),0,1000)
+ rid=room['id']
+ for offset in range((end-start).days):
+  night=(start+timedelta(days=offset)).isoformat()
+  occupied=0
+  for reservation in booked:
+   if reservation.get('checkin') and reservation['checkin']<=night<reservation.get('checkout',''):
+    for line in reservation['rooms']:
+     if line.get('id')==rid:occupied+=integer(line.get('qty'),1,1000)
+  remaining=min(remaining,max(0,room['inventory']-occupied))
+  if remaining<=0:return 0
+ return remaining
+
+def room_availability(c,checkin,checkout):
+ """Public, date-scoped counts, derived from the same confirmed holds as checkout."""
+ start,end=dates(checkin,checkout)
+ ensure_room_starters(c)
+ booked=holding(c)
+ result=[]
+ for room in get(c,'rooms'):
+  if room.get('active') is not True:continue
+  remaining=available_room_count(room,booked,start,end)
+  result.append({'id':room['id'],'totalRooms':room['inventory'],'available':remaining,
+                 'bookable':enabled(room) and remaining>0})
+ return {'checkin':start.isoformat(),'checkout':end.isoformat(),'rooms':result}
+
 def quote(c,v):
  ensure_room_starters(c)
  selected=v.get('rooms',[]); services=v.get('services',[]); addons=v.get('addons',[])
@@ -224,9 +256,8 @@ def quote(c,v):
   free_age=integer(family['freeChildUnderAge'],0,18)
   pet_cost=amount(family['petFee']) or 0
   pet_total=pets*pet_cost
-  for day in range(nights):
-   night=(a+timedelta(days=day)).isoformat();occupied=sum(l['qty'] for p in booked if p.get('checkin') and p['checkin']<=night<p['checkout'] for l in p['rooms'] if l['id']==rid)
-   if occupied+qty>r['inventory']:raise APIError(f"Not enough availability for {r['name']} on {night}.",409)
+  remaining=available_room_count(r,booked,a,b)
+  if qty>remaining:raise APIError(f"Only {remaining} {r['name']} room(s) are available across your selected dates.",409)
   lines.append({'id':rid,'name':r['name'],'qty':qty,'guests':guests,'kids':kids,'pets':pets,'freeChildUnderAge':free_age,'petFee':pet_cost,'petTotal':pet_total,'unit':r['price'],'total':r['price']*qty*nights+pet_total})
  seen=set()
  for item in addons:
@@ -681,6 +712,10 @@ class Handler(BaseHTTPRequestHandler):
    raise APIError('Not found.',404)
   with db() as c:
    if path=='/api/catalog' and method=='GET':return self.respond(public_catalog(c))
+   if path=='/api/availability' and method=='GET':
+    query=parse_qs(urlsplit(self.path).query,keep_blank_values=True)
+    if len(query.get('checkin',[]))!=1 or len(query.get('checkout',[]))!=1:raise APIError('Choose one check-in and one check-out date.')
+    return self.respond(room_availability(c,query['checkin'][0],query['checkout'][0]))
    if path=='/api/quote' and method=='POST':
     v=self.body();return self.respond(quote(c,v))
    if path=='/api/bookings' and method=='POST':
