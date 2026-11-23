@@ -180,7 +180,10 @@
   ],
   "support": {
     "phone": "",
+    "dialPhone": "",
     "email": "",
+    "resortAddress": "Brgy. Libertad Bajo, Sinacaban, Misamis Occidental, Philippines",
+    "officeAddress": "",
     "hours": "",
     "greeting": ""
   }

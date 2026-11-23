@@ -20,8 +20,8 @@ ATTEMPTS={}; LOCK=threading.Lock(); MAX_RECEIPT_BYTES=1_700_000
 SESSION_SECONDS=24*3600
 SESSION_COOKIE="amorap_admin_v3"
 SESSION_RENEW_AFTER=3600
-ADMIN_VERSION="20261123-stock1"
-DASHBOARD_RELEASE="20261123-stock1"
+ADMIN_VERSION="20261123-contactchat1"
+DASHBOARD_RELEASE="20261123-contactchat1"
 PUBLIC_ORIGIN=os.environ.get("AMORA_PUBLIC_ORIGIN", "").rstrip("/")
 PREVIEW='--preview' in sys.argv
 SEED=json.loads((ROOT/'seed.json').read_text(encoding='utf-8'))
@@ -69,6 +69,7 @@ def get(c,k):
   value=decode_json(row['value'])
  except (ValueError,TypeError):raise APIError(f'The saved {k} settings are invalid. Contact support; existing data has not been changed.',500,'SETTING_INVALID')
  if k in SEED and not isinstance(value,type(SEED[k])):raise APIError(f'The saved {k} settings have an invalid format. Contact support; existing data has not been changed.',500,'SETTING_INVALID')
+ if k=='support':return {**SEED.get('support',{}),**value}
  return value
 def ensure_room_starters(c):
  """One-time, non-destructive upgrade for old empty villa rates on Vercel."""
@@ -169,13 +170,55 @@ def validate_payment(v,previous=None):
 
 def validate_support(v):
  if not isinstance(v,dict):raise APIError('Invalid customer care settings.')
- phone=clean(v.get('phone',''),40)
- if phone and (not re.fullmatch(r'[+0-9() .\-]+',phone) or not 7<=len(re.sub(r'\D','',phone))<=15):
-  raise APIError('Enter a valid customer care phone number with country code.')
+ phone=clean(v.get('phone',''),50)
+ dial=clean(v.get('dialPhone',''),20)
+ if phone and (not re.fullmatch(r'[+0-9() .\-/]+',phone) or not 7<=len(re.sub(r'\D','',phone))<=15):
+  raise APIError('Enter a valid display phone number or leave it blank.')
+ if dial and not re.fullmatch(r'\+?[0-9]{7,15}',dial):
+  raise APIError('Tap-to-call number must use only digits and an optional leading +.')
+ if not dial and phone:dial=re.sub(r'[^+0-9]','',phone)
+ if not phone:dial=''
  email=clean(v.get('email',''),200)
  if email and not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email):
   raise APIError('Enter a valid customer care email address.')
- return {'phone':phone,'email':email,'hours':clean(v.get('hours',''),160),'greeting':clean(v.get('greeting',''),500)}
+ return {'phone':phone,'dialPhone':dial,'email':email,
+         'resortAddress':clean(v.get('resortAddress',''),500),
+         'officeAddress':clean(v.get('officeAddress',''),500),
+         'hours':clean(v.get('hours',''),160),
+         'greeting':clean(v.get('greeting',''),500)}
+
+def chat_text(v):
+ return clean(v,1200,True)
+
+def get_chat_thread(c,chat_id,token=None):
+ if type(chat_id) is not int or chat_id<1:raise APIError('Chat not found.',404)
+ row=c.execute('SELECT id,created,payload FROM amorap_booking.messages WHERE id=%s',(chat_id,)).fetchone()
+ data=decode_json(row['payload']) if row else None
+ if not isinstance(data,dict) or data.get('kind')!='chat':raise APIError('Chat not found.',404)
+ if token is not None:
+  if not isinstance(token,str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}',token) or not hmac.compare_digest(str(data.get('tokenHash','')),token_hash(token)):
+   raise APIError('Chat not found.',404)
+ return row,data
+
+def public_chat_thread(row,data):
+ return {'id':row['id'],'status':data.get('status','open'),
+         'guestName':data.get('guestName','Guest'),
+         'updated':data.get('updated',row['created']),
+         'messages':data.get('messages',[])}
+
+def admin_chat_thread(row,data):
+ result=public_chat_thread(row,data)
+ result['email']=data.get('email','')
+ return result
+
+def list_chat_threads(c):
+ rows=c.execute('SELECT id,created,payload FROM amorap_booking.messages ORDER BY created DESC LIMIT 500').fetchall()
+ chats=[]
+ for row in rows:
+  payload=decode_json(row['payload'])
+  if isinstance(payload,dict) and payload.get('kind')=='chat':
+   chats.append(admin_chat_thread(row,payload))
+ return sorted(chats,key=lambda d:d['updated'],reverse=True)
 
 def today():return datetime.now(timezone(timedelta(hours=8))).date()
 def dates(a,b):
@@ -433,7 +476,14 @@ def admin_section(c,key):
   for record in records:
    if not isinstance(record.get('guest'),dict) or not isinstance(record.get('payment'),dict) or not isinstance(record.get('status'),str) or any(not isinstance(record.get(field,[]),list) or any(not isinstance(x,dict) for x in record.get(field,[])) for field in ('rooms','addons','services')) or not all(field in record for field in ('rooms','addons')):raise APIError('Invalid stored reservation record.',500,'RESERVATION_FORMAT_ERROR')
   return records
- if key=='messages':return [{'id':r['id'],'created':r['created'],**decode_json(r['payload'])} for r in c.execute('SELECT * FROM amorap_booking.messages ORDER BY created DESC')]
+ if key=='messages':
+  records=[]
+  for r in c.execute('SELECT * FROM amorap_booking.messages ORDER BY created DESC'):
+   payload=decode_json(r['payload'])
+   if not isinstance(payload,dict):raise APIError('An existing contact message has an invalid format.',500,'MESSAGE_FORMAT_ERROR')
+   if payload.get('kind')!='chat':records.append({'id':r['id'],'created':r['created'],**payload})
+  return records
+ if key=='chats':return list_chat_threads(c)
  raise ValueError('Unknown dashboard section')
 
 def dashboard_data(c):
@@ -441,7 +491,7 @@ def dashboard_data(c):
  # Each section has a savepoint: PostgreSQL aborts a transaction on SQL errors
  # until it is rolled back. A broken read cannot poison the remaining reads.
  payload={'revisions':{},'sectionErrors':{},'release':DASHBOARD_RELEASE}
- for key in ('rooms','addons','payment','services','support','bookings','messages'):
+ for key in ('rooms','addons','payment','services','support','bookings','messages','chats'):
   c.execute('SAVEPOINT admin_section_read')
   try:
    result=admin_section(c,key)
@@ -685,6 +735,22 @@ class Handler(BaseHTTPRequestHandler):
      remove_unreferenced_photos(c,removed)
      c.commit()
      return self.respond({'ok':True,'value':updated,'revision':revision(updated)})
+    if path=='/api/admin/chats' and method=='GET':
+     return self.respond({'chats':list_chat_threads(c)})
+    if path in ('/api/admin/chat/reply','/api/admin/chat/status') and method=='POST':
+     v=self.body()
+     row,chat=get_chat_thread(c,v.get('id'))
+     if path.endswith('/reply'):
+      if chat.get('status')!='open':raise APIError('Chat is closed. Reopen it to reply.',409)
+      if len(chat.get('messages',[]))>=100:raise APIError('Conversation is full. Start another chat.',409)
+      chat['messages'].append({'role':'admin','text':chat_text(v.get('message')),'at':int(time.time())})
+     else:
+      if v.get('status') not in ('open','closed'):raise APIError('Choose open or closed.')
+      chat['status']=v['status']
+     chat['updated']=int(time.time())
+     c.execute('UPDATE amorap_booking.messages SET payload=%s WHERE id=%s',(json.dumps(chat,ensure_ascii=False),row['id']))
+     c.commit()
+     return self.respond({'ok':True,'chat':admin_chat_thread(row,chat)})
     if path=='/api/admin/data' and method=='GET':
      payload=dashboard_data(c);c.commit();return self.respond(payload)
     if path in ('/api/admin/rooms','/api/admin/addons','/api/admin/payment','/api/admin/services','/api/admin/support') and method=='PUT':
@@ -752,6 +818,32 @@ class Handler(BaseHTTPRequestHandler):
     if re.fullmatch(r'receipt-[a-f0-9]{32}\.(jpg|png|webp)',old):
      c.execute('DELETE FROM amorap_booking.photos WHERE name=%s',(old,))
     c.commit();return self.respond({'ok':True,'status':'payment_review'})
+   if path=='/api/chat/start' and method=='POST':
+    v=self.body()
+    name=clean(v.get('name','Guest'),100) or 'Guest'
+    email=clean(v.get('email',''),200)
+    if email and not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email):raise APIError('Enter a valid email or leave it empty.')
+    first=chat_text(v.get('message'))
+    now=int(time.time());token=secrets.token_urlsafe(32)
+    last_minute=c.execute('SELECT COUNT(*) AS count FROM amorap_booking.messages WHERE created>%s',(now-60,)).fetchone()
+    if last_minute and last_minute['count']>100:raise APIError('Live chat is busy. Try again in a minute.',429)
+    chat={'kind':'chat','guestName':name,'email':email,'tokenHash':token_hash(token),
+          'status':'open','updated':now,
+          'messages':[{'role':'guest','text':first,'at':now}]}
+    row=c.execute('INSERT INTO amorap_booking.messages(created,payload) VALUES (%s,%s) RETURNING id,created',
+                  (now,json.dumps(chat,ensure_ascii=False))).fetchone()
+    c.commit()
+    return self.respond({'chat':public_chat_thread(row,chat),'token':token},201)
+   if path in ('/api/chat/poll','/api/chat/send') and method=='POST':
+    v=self.body();row,chat=get_chat_thread(c,v.get('id'),v.get('token'))
+    if path.endswith('send'):
+     if chat.get('status')!='open':raise APIError('This chat was closed. Start a new conversation.',409)
+     if len(chat.get('messages',[]))>=100:raise APIError('Conversation is full. Start another chat.',409)
+     chat['messages'].append({'role':'guest','text':chat_text(v.get('message')),'at':int(time.time())})
+     chat['updated']=int(time.time())
+     c.execute('UPDATE amorap_booking.messages SET payload=%s WHERE id=%s',(json.dumps(chat,ensure_ascii=False),row['id']))
+     c.commit()
+    return self.respond({'chat':public_chat_thread(row,chat)})
    if path=='/api/contact' and method=='POST':
     v=self.body();p={'name':clean(v.get('name',''),150,True),'email':clean(v.get('email',''),200,True),'phone':clean(v.get('phone',''),40),'message':clean(v.get('message',''),3000,True)}
     if p['phone'] and (not re.fullmatch(r'[+0-9() .\-]+',p['phone']) or not 7<=len(re.sub(r'\D','',p['phone']))<=15):raise APIError('Enter a valid callback phone number.')

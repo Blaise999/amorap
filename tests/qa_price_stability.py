@@ -64,10 +64,10 @@ with sync_playwright() as p:
     html=(root/'public/admin/index.html').read_text();html=re.sub(r'<script[^>]*>.*?</script>','',html,flags=re.S);html=re.sub(r'<link[^>]*>','',html)
     admin.set_content(html);admin.add_style_tag(content=(root/'public/assets/styles/booking.css').read_text())
     admin.evaluate("""(s)=>{
-      window.qa={...s,bookings:[],messages:[],sectionErrors:{},revisions:{rooms:'0',services:'0',addons:'0',payment:'0'},release:'20261122-receipt1'};
+      window.qa={...s,bookings:[],messages:[],chats:[],support:{},sectionErrors:{},revisions:{rooms:'0',services:'0',addons:'0',payment:'0',support:'0'},release:'20261123-contactchat1'};
       window.fetch=async (url,opts={})=>{
         const name=String(url).split('/').pop();let data={};
-        if(name==='session')data={csrf:'test',version:'20261122-receipt1'};
+        if(name==='session')data={csrf:'test',version:'20261123-contactchat1'};
         else if(name==='data')data=window.qa;
         else if(name==='rooms'&&opts.method==='PUT'){
            window.qa.rooms=JSON.parse(opts.body).items;window.qa.revisions.rooms='1';data={value:window.qa.rooms,revision:'1'};

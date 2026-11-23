@@ -159,29 +159,113 @@ document.addEventListener('change',e=>{if(e.target.matches('[data-addon]')){cons
 modal.addEventListener('click',e=>{if(e.target===modal)close()});document.addEventListener('keydown',e=>{if(modal.hidden)return;if(e.key==='Escape')close();if(e.key==='Tab'){const targets=$$('button:not(:disabled),a[href],input:not(:disabled),textarea,select',modal).filter(x=>x.getClientRects().length);const first=targets[0],last=targets.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus()}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus()}}});
 
 function syncCustomerCare(){
- const c=catalog?.support||{},phone=String(c.phone||''),dial=phone.replace(/[^+0-9]/g,'');
- const valid=/^\+?[0-9]{7,15}$/.test(dial);
+ const c=catalog?.support||{},phone=String(c.phone||''),dial=String(c.dialPhone||phone).replace(/[^+0-9]/g,'');
+ const valid=Boolean(phone)&&/^\+?[0-9]{7,15}$/.test(dial);
  const root=document.querySelector('[data-support-details]');
  if(root){
   root.hidden=false;
   const email=$('[data-support-email]',root),hours=$('[data-support-hours]',root),greeting=$('[data-support-greeting]',root);
-  if(email){email.textContent=c.email||'Send us a message using the form';if(c.email&&/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c.email)){email.href='mailto:'+c.email}else email.removeAttribute('href')}
+  const resort=$('[data-support-address]',root),office=$('[data-support-office]',root);
+  if(email){
+   email.textContent=c.email||'Send a message using the form';
+   if(c.email&&/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c.email))email.href='mailto:'+c.email;
+   else email.removeAttribute('href');
+  }
   if(hours){hours.textContent=c.hours||'';hours.hidden=!c.hours}
   if(greeting){greeting.textContent=c.greeting||'';greeting.hidden=!c.greeting}
+  if(resort){resort.textContent=c.resortAddress||'';resort.closest('[data-support-address-block]').hidden=!c.resortAddress}
+  if(office){office.textContent=c.officeAddress||'';office.closest('[data-support-office-block]').hidden=!c.officeAddress}
  }
  $$('[data-support-call]').forEach(link=>{
   link.hidden=!valid;
-  if(valid){link.href='tel:'+dial;link.setAttribute('aria-label','Call AMORAP customer care at '+phone);if(link.hasAttribute('data-support-number'))link.textContent=phone}
-  else link.removeAttribute('href');
+  if(valid){
+   link.href='tel:'+dial;
+   link.setAttribute('aria-label','Call AMORAP at '+phone);
+   if(link.hasAttribute('data-support-number'))link.textContent=phone;
+  }else link.removeAttribute('href');
  });
- const floating=document.getElementById('am-customer-call');
- if(valid){
-  if(!floating){const button=document.createElement('a');button.id='am-customer-call';button.className='am-call-fab';button.textContent='☎ Call customer care';document.body.append(button)}
-  const link=document.getElementById('am-customer-call');link.href='tel:'+dial;link.setAttribute('aria-label','Call AMORAP customer care at '+phone);
- }else if(floating)floating.remove();
+ // The old large floating CALL button obscured the reservation drawer.
+ document.getElementById('am-customer-call')?.remove();
+ // Contact details are managed once in Admin, then published across all pages.
+ const footer=document.querySelector('footer');
+ if(footer){
+  let strip=footer.querySelector('.am-site-contact-inline');
+  if(!strip){strip=document.createElement('div');strip.className='am-site-contact-inline';footer.append(strip)}
+  strip.replaceChildren();
+  if(c.resortAddress){const address=document.createElement('span');address.textContent=c.resortAddress;strip.append(address)}
+  if(valid){const link=document.createElement('a');link.textContent='Phone: '+phone;link.href='tel:'+dial;strip.append(link)}
+  if(c.email){const link=document.createElement('a');link.textContent=c.email;link.href='mailto:'+c.email;strip.append(link)}
+  strip.hidden=!strip.children.length;
+ }
+}
+
+function initLiveChat(){
+ // Small, collapsible button; hidden while the booking modal is open.
+ const widget=document.createElement('div');widget.className='am-live-chat';
+ widget.innerHTML='<button type="button" class="am-chat-toggle" aria-label="Open live chat" aria-expanded="false" title="Chat with AMORAP">💬</button>'+
+ '<section class="am-chat-panel" hidden role="region" aria-label="Chat with AMORAP customer care">'+
+ '<header class="am-chat-header"><div><strong>AMORAP Live Chat</strong><small>Messages go directly to our team</small></div><button type="button" class="am-chat-close" aria-label="Close chat">×</button></header>'+
+ '<div class="am-chat-messages" aria-live="polite"><p class="am-chat-hint">Ask a question. A staff member can reply here.</p></div>'+
+ '<div class="am-chat-error" role="alert"></div>'+
+ '<form class="am-chat-form"><div class="am-chat-identity"><label>Name (optional)<input name="name" maxlength="100" placeholder="Your name" autocomplete="name"></label><label>Email (optional)<input name="email" type="email" maxlength="200" placeholder="you@example.com" autocomplete="email"></label></div>'+
+ '<label class="am-chat-message-label">Message<textarea name="message" required maxlength="1200" rows="2" placeholder="How can we help?"></textarea></label>'+
+ '<button class="am-chat-send" type="submit">Send message</button></form>'+
+ '<button type="button" class="am-chat-new" hidden>Start a new conversation</button></section>';
+ document.body.append(widget);
+ const toggle=$('.am-chat-toggle',widget),panel=$('.am-chat-panel',widget),closeButton=$('.am-chat-close',widget);
+ const errorBox=$('.am-chat-error',widget),feed=$('.am-chat-messages',widget),form=$('.am-chat-form',widget),newButton=$('.am-chat-new',widget);
+ const identity=$('.am-chat-identity',widget);
+ let session=null,chat=null,loading=false;
+ try{const saved=JSON.parse(localStorage.getItem('amorap-live-chat-v1')||'null');if(saved&&Number.isInteger(saved.id)&&typeof saved.token==='string')session=saved}catch{}
+ const setError=message=>{errorBox.textContent=message||'';errorBox.hidden=!message};
+ const saveSession=()=>{try{if(session)localStorage.setItem('amorap-live-chat-v1',JSON.stringify(session));else localStorage.removeItem('amorap-live-chat-v1')}catch{}};
+ function renderMessages(){
+  const messages=chat?.messages||[];
+  feed.innerHTML=messages.length?messages.map(m=>'<div class="am-chat-message '+(m.role==='admin'?'is-staff':'is-guest')+'"><small>'+(m.role==='admin'?'AMORAP team':'You')+'</small><p>'+esc(m.text)+'</p></div>').join(''):'<p class="am-chat-hint">Ask a question. A staff member can reply here.</p>';
+  feed.scrollTop=feed.scrollHeight;
+  identity.hidden=Boolean(session);
+  const closed=Boolean(chat&&chat.status==='closed');
+  form.hidden=closed;
+  newButton.hidden=!closed;
+  if(closed)setError('This conversation is closed. You can start a new one.');
+  else if(!loading)setError('');
+ }
+ async function poll(){
+  if(!session||loading||panel.hidden||document.visibilityState==='hidden')return;
+  loading=true;
+  try{const data=await api('chat/poll',session);chat=data.chat;renderMessages()}
+  catch(e){
+   if(/not found/i.test(e.message)){session=null;chat=null;saveSession();renderMessages()}
+   else setError('Chat connection interrupted. Your messages remain saved; retry shortly.');
+  }finally{loading=false}
+ }
+ toggle.addEventListener('click',()=>{
+  panel.hidden=!panel.hidden;
+  toggle.setAttribute('aria-expanded',String(!panel.hidden));
+  toggle.setAttribute('aria-label',panel.hidden?'Open live chat':'Hide live chat');
+  if(!panel.hidden){renderMessages();poll();form.querySelector('[name=message]')?.focus({preventScroll:true})}
+ });
+ closeButton.addEventListener('click',()=>{panel.hidden=true;toggle.setAttribute('aria-expanded','false');toggle.setAttribute('aria-label','Open live chat');toggle.focus()});
+ newButton.addEventListener('click',()=>{session=null;chat=null;saveSession();renderMessages();form.querySelector('[name=message]').focus()});
+ form.addEventListener('submit',async e=>{
+  e.preventDefault();if(loading)return;
+  const input=form.elements.namedItem('message'),text=input.value.trim();if(!text)return;
+  const button=form.querySelector('[type=submit]');
+  loading=true;button.disabled=true;setError('');
+  try{
+   const data=session?
+    await api('chat/send',{...session,message:text}):
+    await api('chat/start',{name:form.elements.namedItem('name').value,email:form.elements.namedItem('email').value,message:text});
+   if(!session){session={id:data.chat.id,token:data.token};saveSession()}
+   chat=data.chat;input.value='';renderMessages();
+  }catch(err){setError(err.message)}
+  finally{loading=false;button.disabled=false}
+ });
+ window.setInterval(poll,8000);
+ document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')poll()});
 }
 const cf=$('#contact-form');if(cf){const topic=new URLSearchParams(location.search).get('topic');const subjects={dining:'Dining inquiry',event:'Event inquiry',careers:'Careers inquiry'};if(subjects[topic])cf.elements.namedItem('message').value=subjects[topic]+':\n';}if(cf)cf.addEventListener('submit',async e=>{e.preventDefault();const btn=cf.querySelector('button'),res=$('#contact-result');btn.disabled=true;try{await api('contact',Object.fromEntries(new FormData(cf)));res.textContent='Your message has been sent to the resort dashboard.';cf.reset()}catch(e){res.textContent=e.message}finally{btn.disabled=false}});
-persist();load().then(syncCustomerCare).catch(()=>{});if($('#villa-catalog')||$('#event-catalog')||$('#dining-catalog')){load().then(renderAll);}if(document.body.dataset.openBooking)beginBooking();else if(document.body.dataset.openCheckout)renderCart();
+persist();initLiveChat();load().then(syncCustomerCare).catch(()=>{});if($('#villa-catalog')||$('#event-catalog')||$('#dining-catalog')){load().then(renderAll);}if(document.body.dataset.openBooking)beginBooking();else if(document.body.dataset.openCheckout)renderCart();
 const heroVideo=$('.am-hero-video');if(heroVideo&&matchMedia('(prefers-reduced-motion: reduce)').matches){heroVideo.autoplay=false;heroVideo.pause();const b=$('[data-video-toggle]');b.textContent='Play video';b.setAttribute('aria-label','Play background video');}
 
 // The site header changes from transparent over the photographic hero to cream on scroll.
