@@ -19,14 +19,6 @@ jobs:
       - run: python -m compileall -q server.py api/index.py tests
       - name: Guest and admin JavaScript syntax
         run: node --check public/assets/site.js && node --check public/assets/admin.js
-      - name: Install Chromium browser QA tooling
-        run: |
-          python -m pip install playwright
-          python -m playwright install chromium
-      - name: Customer care and family editor browser checks
-        run: python tests/qa_easy_admin_ui.py
-      - name: Guest booking and contact browser checks
-        run: python tests/qa_guest_family_ui.py
       - name: Admin and guest receipt API
         run: python tests/qa_admin.py
       - name: Date-scoped remaining room inventory
@@ -45,3 +37,11 @@ jobs:
         run: python tests/qa_photo_uploads.py
       - name: Admin deletion
         run: python tests/qa_delete_now.py
+      - name: Install Chromium browser QA tooling
+        run: |
+          python -m pip install playwright
+          python -m playwright install chromium
+      - name: Customer care and family editor browser checks
+        run: python tests/qa_easy_admin_ui.py
+      - name: Guest booking and contact browser checks
+        run: python tests/qa_guest_family_ui.py
