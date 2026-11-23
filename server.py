@@ -476,7 +476,13 @@ def admin_section(c,key):
   for record in records:
    if not isinstance(record.get('guest'),dict) or not isinstance(record.get('payment'),dict) or not isinstance(record.get('status'),str) or any(not isinstance(record.get(field,[]),list) or any(not isinstance(x,dict) for x in record.get(field,[])) for field in ('rooms','addons','services')) or not all(field in record for field in ('rooms','addons')):raise APIError('Invalid stored reservation record.',500,'RESERVATION_FORMAT_ERROR')
   return records
- if key=='messages':return [{'id':r['id'],'created':r['created'],**decode_json(r['payload'])} for r in c.execute('SELECT * FROM amorap_booking.messages ORDER BY created DESC') if isinstance(decode_json(r['payload']),dict) and decode_json(r['payload']).get('kind')!='chat']
+ if key=='messages':
+  records=[]
+  for r in c.execute('SELECT * FROM amorap_booking.messages ORDER BY created DESC'):
+   payload=decode_json(r['payload'])
+   if not isinstance(payload,dict):raise APIError('An existing contact message has an invalid format.',500,'MESSAGE_FORMAT_ERROR')
+   if payload.get('kind')!='chat':records.append({'id':r['id'],'created':r['created'],**payload})
+  return records
  if key=='chats':return list_chat_threads(c)
  raise ValueError('Unknown dashboard section')
 
