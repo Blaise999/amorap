@@ -4,7 +4,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright,expect
 root=Path(__file__).resolve().parents[1]
 seed=json.loads((root/'seed.json').read_text())
-settings={**seed,'bookings':[],'messages':[],'revisions':{k:'r0' for k in ['rooms','addons','services','payment','support']},'sectionErrors':{},'release':'20261123-contactchat1'}
+settings={**seed,'bookings':[],'messages':[],'chats':[{'id':7,'guestName':'QA chat guest','email':'chat@example.test','status':'open','updated':1000,'messages':[{'role':'guest','text':'Is anyone there?','at':1000}]}],'revisions':{k:'r0' for k in ['rooms','addons','services','payment','support']},'sectionErrors':{},'release':'20261123-contactchat1'}
 with sync_playwright() as p:
  browser=p.chromium.launch(executable_path=(os.environ.get('QA_CHROMIUM') or ('/usr/bin/chromium' if Path('/usr/bin/chromium').is_file() else None)),headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
  page=browser.new_page(viewport={'width':1300,'height':920});page.set_default_timeout(4500)
@@ -49,9 +49,13 @@ with sync_playwright() as p:
  expect(page.get_by_role('heading',name='Contact details')).to_be_visible()
  page.locator('[name=phone]').fill('+63 912 345 6789')
  page.locator('[name=hours]').fill('Everyday 8am-8pm')
- page.get_by_role('button',name='Save customer care').click()
- expect(page.locator('#admin-message')).to_contain_text('Customer care updated')
+ page.locator('[name=dialPhone]').fill('+639123456789')
+ page.locator('[name=resortAddress]').fill('QA resort address')
+ page.locator('[name=officeAddress]').fill('QA head office')
+ page.get_by_role('button',name='Save contact details').click()
+ expect(page.locator('#admin-message')).to_contain_text('Contact numbers, email and addresses updated')
  assert page.evaluate('window.qa.support.phone')=='+63 912 345 6789'
+ assert page.evaluate('window.qa.support.officeAddress')=='QA head office'
  page.get_by_role('button',name='Live chat').click()
  expect(page.get_by_text('Is anyone there?')).to_be_visible()
  page.locator('#am-admin-chat-reply [name=message]').fill('Yes, we are here.')
