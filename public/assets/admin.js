@@ -132,7 +132,7 @@ async function upload(file){
  return (await api('upload','POST',{data})).url;
 }
 area.addEventListener('input',e=>{
- if(e.target.matches('input,textarea,select')&&e.target.id!=='booking-filter')dirty=true;
+ if(e.target.matches('input,textarea,select')&&e.target.id!=='booking-filter'&&!e.target.closest('#am-admin-chat-reply'))dirty=true;
  if(e.target.name==='price'&&e.target.closest('[data-kind="rooms"]')){
   const card=e.target.closest('[data-index]');
   const preview=card.querySelector('[data-price-preview]');
