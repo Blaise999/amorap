@@ -129,7 +129,7 @@ def family_rules(r):
  }
 
 def guest_room_policies(r):
- return {**r,**family_rules(r)}
+ return {**r,**family_rules(r),'includedGuests':min(5,r['capacity']),'extraGuestFee':r.get('extraGuestFee',0)}
 
 def payment_methods(p):
  """Configured manual-payment choices; never trust a browser-selected account."""
@@ -301,9 +301,14 @@ def quote(c,v):
   free_age=integer(family['freeChildUnderAge'],0,18)
   pet_cost=amount(family['petFee']) or 0
   pet_total=pets*pet_cost
+  included=min(5,r['capacity'])*qty
+  extra_guests=max(0,guests-included)
+  extra_fee=amount(r.get('extraGuestFee',0)) or 0
+  if extra_guests and not extra_fee:raise APIError('Extra guest pricing is not configured for this villa. Reduce guests or contact the resort.',409)
+  extra_total=extra_guests*extra_fee*nights
   remaining=available_room_count(r,booked,a,b)
   if qty>remaining:raise APIError(f"Only {remaining} {r['name']} room(s) are available across your selected dates.",409)
-  lines.append({'id':rid,'name':r['name'],'qty':qty,'guests':guests,'kids':kids,'pets':pets,'freeChildUnderAge':free_age,'petFee':pet_cost,'petTotal':pet_total,'unit':r['price'],'total':r['price']*qty*nights+pet_total})
+  lines.append({'id':rid,'name':r['name'],'qty':qty,'guests':guests,'kids':kids,'pets':pets,'freeChildUnderAge':free_age,'petFee':pet_cost,'petTotal':pet_total,'includedGuests':included,'extraGuests':extra_guests,'extraGuestFee':extra_fee,'extraGuestTotal':extra_total,'unit':r['price'],'total':r['price']*qty*nights+pet_total+extra_total})
  seen=set()
  for item in addons:
   if not isinstance(item,dict):raise APIError('Invalid extra.')
@@ -358,7 +363,7 @@ def validate_rooms(c,rows):
   imgs=validate_photo_urls(c,imgs,existing_images=previous.get(rid,()))
   family=family_rules(r)
   family={'bedrooms':integer(family['bedrooms'],1,20),'freeChildUnderAge':integer(family['freeChildUnderAge'],0,18),'maxKids':integer(family['maxKids'],0,30),'petsAllowed':family['petsAllowed'],'maxPets':integer(family['maxPets'],0,30),'petFee':amount(family['petFee']) or 0,'petPolicy':clean(family['petPolicy'],1000)}
-  result.append({**family,'id':rid,'name':clean(r.get('name'),120,True),'category':clean(r.get('category',''),100),'description':clean(r.get('description',''),3000),'price':amount(r.get('price')),'capacity':integer(r.get('capacity'),0,100),'inventory':integer(r.get('inventory'),0,1000),'bed':clean(r.get('bed',''),200),'size':clean(r.get('size',''),100),'policy':clean(r.get('policy',''),2000),'amenities':[clean(x,150,True) for x in amen],'images':imgs,'active':r.get('active') is True,'reviewed':r.get('reviewed',True) is True})
+  result.append({**family,'extraGuestFee':amount(r.get('extraGuestFee',0)) or 0,'id':rid,'name':clean(r.get('name'),120,True),'category':clean(r.get('category',''),100),'description':clean(r.get('description',''),3000),'price':amount(r.get('price')),'capacity':integer(r.get('capacity'),0,100),'inventory':integer(r.get('inventory'),0,1000),'bed':clean(r.get('bed',''),200),'size':clean(r.get('size',''),100),'policy':clean(r.get('policy',''),2000),'amenities':[clean(x,150,True) for x in amen],'images':imgs,'active':r.get('active') is True,'reviewed':r.get('reviewed',True) is True})
  return result
 
 def validate_addons(rows):
@@ -835,7 +840,9 @@ class Handler(BaseHTTPRequestHandler):
     c.commit()
     return self.respond({'chat':public_chat_thread(row,chat),'token':token},201)
    if path in ('/api/chat/poll','/api/chat/send') and method=='POST':
-    v=self.body();row,chat=get_chat_thread(c,v.get('id'),v.get('token'))
+    v=self.body();token=v.get('token')
+    if not isinstance(token,str) or not token:raise APIError('Chat not found.',404)
+    row,chat=get_chat_thread(c,v.get('id'),token)
     if path.endswith('send'):
      if chat.get('status')!='open':raise APIError('This chat was closed. Start a new conversation.',409)
      if len(chat.get('messages',[]))>=100:raise APIError('Conversation is full. Start another chat.',409)
