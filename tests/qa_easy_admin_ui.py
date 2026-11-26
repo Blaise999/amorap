@@ -56,6 +56,7 @@ with sync_playwright() as p:
  expect(page.locator('#admin-message')).to_contain_text('Contact numbers, email and addresses updated')
  assert page.evaluate('window.qa.support.phone')=='+63 912 345 6789'
  assert page.evaluate('window.qa.support.officeAddress')=='QA head office'
+ expect(page.locator('[data-tab=chats] .am-admin-chat-badge')).to_have_text('1')
  page.get_by_role('button',name='Live chat').click()
  expect(page.get_by_text('Is anyone there?')).to_be_visible()
  page.locator('#am-admin-chat-reply [name=message]').fill('Yes, we are here.')
