@@ -182,3 +182,16 @@ body:has(.am-modal:not([hidden])) .am-live-chat{display:none!important}
 .am-chat-error{flex:none;overflow-wrap:anywhere}
 @media(max-width:600px){.am-live-chat{left:10px;right:auto}.am-chat-panel{width:min(350px,calc(100vw - 20px))}}
 @media(max-height:420px){.am-chat-panel{height:max(0px,calc(var(--am-chat-vh,100dvh) - 70px));max-height:none}.am-chat-header{padding:6px 10px}.am-chat-form{padding:6px}.am-chat-messages{min-height:32px}}
+
+/* Message counts are visible without opening the conversation. */
+.am-chat-toggle{position:relative}
+.am-chat-badge,.am-admin-chat-badge{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;border-radius:999px;background:#c62828;color:white;font:700 11px/1 system-ui,sans-serif;box-sizing:border-box}
+.am-chat-badge{position:absolute;top:-5px;right:-6px;border:2px solid white;min-width:23px;height:23px}
+.am-chat-badge[hidden],.am-chat-delivery[hidden]{display:none!important}
+.am-admin-tabs [data-tab="chats"]{display:inline-flex;align-items:center;gap:6px}
+.am-chat-thread-item{position:relative;padding-right:39px}
+.am-chat-thread-item .am-admin-chat-badge{position:absolute;top:12px;right:10px}
+.am-chat-identity{display:block;margin-bottom:6px}
+.am-chat-identity summary{font-size:12px;color:#45634c;cursor:pointer;padding:4px 0}
+.am-chat-identity-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:6px 0}
+.am-chat-delivery{margin:0;padding:5px 10px;color:#35634a;font-size:12px}

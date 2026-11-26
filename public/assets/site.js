@@ -207,27 +207,34 @@ function syncCustomerCare(){
 function initLiveChat(){
  // Small, collapsible button; hidden while the booking modal is open.
  const widget=document.createElement('div');widget.className='am-live-chat';
- widget.innerHTML='<button type="button" class="am-chat-toggle" aria-label="Open live chat" aria-expanded="false" title="Chat with AMORAP">💬</button>'+
+ widget.innerHTML='<button type="button" class="am-chat-toggle" aria-label="Open live chat" aria-expanded="false" title="Chat with AMORAP"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5 9 9 0 0 1-3.7-.8L3 21l1.8-5.8a9 9 0 0 1-.8-3.7A8.5 8.5 0 0 1 12.5 3h.5a8.5 8.5 0 0 1 8 8v.5Z"/><path d="M8 12h.01M12 12h.01M16 12h.01"/></svg><span class="am-chat-badge" hidden aria-live="polite"></span></button>'+
  '<section class="am-chat-panel" hidden role="region" aria-label="Chat with AMORAP customer care">'+
  '<header class="am-chat-header"><div><strong>AMORAP Live Chat</strong><small>Messages go directly to our team</small></div><button type="button" class="am-chat-close" aria-label="Close chat">×</button></header>'+
  '<div class="am-chat-messages" aria-live="polite"><p class="am-chat-hint">Ask a question. A staff member can reply here.</p></div>'+
- '<div class="am-chat-error" role="alert"></div>'+
- '<form class="am-chat-form"><div class="am-chat-identity"><label>Name (optional)<input name="name" maxlength="100" placeholder="Your name" autocomplete="name"></label><label>Email (optional)<input name="email" type="email" maxlength="200" placeholder="you@example.com" autocomplete="email"></label></div>'+
+ '<div class="am-chat-error" role="alert" hidden></div><p class="am-chat-delivery" role="status" hidden></p>'+
+ '<form class="am-chat-form"><details class="am-chat-identity"><summary>Add your name or email (optional)</summary><div class="am-chat-identity-fields"><label>Name (optional)<input name="name" maxlength="100" placeholder="Your name" autocomplete="name"></label><label>Email (optional)<input name="email" type="email" maxlength="200" placeholder="you@example.com" autocomplete="email"></label></div></details>'+
  '<label class="am-chat-message-label">Message<textarea name="message" required maxlength="1200" rows="2" placeholder="How can we help?"></textarea></label>'+
  '<button class="am-chat-send" type="submit">Send message</button></form>'+
  '<button type="button" class="am-chat-new" hidden>Start a new conversation</button></section>';
  document.body.append(widget);
  const toggle=$('.am-chat-toggle',widget),panel=$('.am-chat-panel',widget),closeButton=$('.am-chat-close',widget);
  const errorBox=$('.am-chat-error',widget),feed=$('.am-chat-messages',widget),form=$('.am-chat-form',widget),newButton=$('.am-chat-new',widget);
- const identity=$('.am-chat-identity',widget);
- let session=null,chat=null,loading=false,polling=false,sendVersion=0;
- try{const saved=JSON.parse(localStorage.getItem('amorap-live-chat-v1')||'null');if(saved&&Number.isInteger(saved.id)&&typeof saved.token==='string')session=saved}catch{}
+ const identity=$('.am-chat-identity',widget),badge=$('.am-chat-badge',widget),delivery=$('.am-chat-delivery',widget);
+ let session=null,chat=null,loading=false,polling=false,sendVersion=0,seenReplies=0,lastTranscript='';
+ try{const saved=JSON.parse(localStorage.getItem('amorap-live-chat-v1')||'null');if(saved&&Number.isInteger(saved.id)&&typeof saved.token==='string'){session={id:saved.id,token:saved.token};seenReplies=Number.isInteger(saved.seenReplies)?Math.max(0,saved.seenReplies):0}}catch{}
  const setError=message=>{errorBox.textContent=message||'';errorBox.hidden=!message};
- const saveSession=()=>{try{if(session)localStorage.setItem('amorap-live-chat-v1',JSON.stringify(session));else localStorage.removeItem('amorap-live-chat-v1')}catch{}};
+ const saveSession=()=>{try{if(session)localStorage.setItem('amorap-live-chat-v1',JSON.stringify({...session,seenReplies}));else localStorage.removeItem('amorap-live-chat-v1')}catch{}};
+ function updateBadge(){
+  const replies=(chat?.messages||[]).filter(m=>m.role==='admin').length;
+  if(chat&&!panel.hidden&&modal.hidden&&document.visibilityState!=='hidden'){seenReplies=replies;saveSession()}
+  const count=Math.max(0,replies-seenReplies);badge.hidden=!count;badge.textContent=count>99?'99+':String(count);toggle.title=count?count+' unread message(s) from AMORAP':'Chat with AMORAP';
+  toggle.setAttribute('aria-label',panel.hidden?'Open live chat':'Hide live chat');
+ }
  function renderMessages(){
-  const messages=chat?.messages||[];
+  const messages=chat?.messages||[];updateBadge();const transcript=JSON.stringify(messages);
+  if(transcript!==lastTranscript){lastTranscript=transcript;
   feed.innerHTML=messages.length?messages.map(m=>'<div class="am-chat-message '+(m.role==='admin'?'is-staff':'is-guest')+'"><small>'+(m.role==='admin'?'AMORAP team':'You')+'</small><p>'+esc(m.text)+'</p></div>').join(''):'<p class="am-chat-hint">Ask a question. A staff member can reply here.</p>';
-  feed.scrollTop=feed.scrollHeight;
+  feed.scrollTop=feed.scrollHeight;}
   identity.hidden=Boolean(session);
   const closed=Boolean(chat&&chat.status==='closed');
   form.hidden=closed;
@@ -236,11 +243,11 @@ function initLiveChat(){
   else if(!loading)setError('');
  }
  async function poll(){
-  if(!session||loading||polling||panel.hidden||!modal.hidden||document.visibilityState==='hidden')return;
+  if(!session||loading||polling||document.visibilityState==='hidden')return;
   polling=true;const requestedSession=session,version=sendVersion;
   try{const data=await api('chat/poll',session);if(session===requestedSession&&version===sendVersion){chat=data.chat;renderMessages()}}
   catch(e){
-   if(session===requestedSession&&version===sendVersion){if(/not found/i.test(e.message)){session=null;chat=null;saveSession();renderMessages()}
+   if(session===requestedSession&&version===sendVersion){if(/not found/i.test(e.message)){session=null;chat=null;seenReplies=0;saveSession();renderMessages()}
    else setError('Chat connection interrupted. Please retry shortly.');}
   }finally{polling=false}
  }
@@ -251,27 +258,27 @@ function initLiveChat(){
   if(!panel.hidden){renderMessages();poll()}
  });
  closeButton.addEventListener('click',()=>{panel.hidden=true;toggle.setAttribute('aria-expanded','false');toggle.setAttribute('aria-label','Open live chat');toggle.focus()});
- newButton.addEventListener('click',()=>{session=null;chat=null;saveSession();renderMessages();form.querySelector('[name=message]').focus()});
+ newButton.addEventListener('click',()=>{session=null;chat=null;seenReplies=0;delivery.hidden=true;saveSession();renderMessages();form.querySelector('[name=message]').focus()});
  form.addEventListener('submit',async e=>{
   e.preventDefault();if(loading)return;
   const input=form.elements.namedItem('message'),text=input.value.trim();if(!text)return;
   const button=form.querySelector('[type=submit]');
-  loading=true;sendVersion++;button.disabled=true;setError('');
+  loading=true;sendVersion++;button.disabled=true;button.textContent='Sending…';delivery.hidden=true;setError('');
   try{
    const data=session?
     await api('chat/send',{...session,message:text}):
     await api('chat/start',{name:form.elements.namedItem('name').value,email:form.elements.namedItem('email').value,message:text});
    if(!session){session={id:data.chat.id,token:data.token};saveSession()}
-   chat=data.chat;input.value='';renderMessages();
+   chat=data.chat;input.value='';renderMessages();delivery.textContent='Sent to customer care';delivery.hidden=false;
   }catch(err){setError(err.message)}
-  finally{loading=false;button.disabled=false}
+  finally{loading=false;button.disabled=false;button.textContent='Send message'}
  });
  const closeForBooking=()=>{widget.hidden=!modal.hidden;if(!modal.hidden){panel.hidden=true;toggle.setAttribute('aria-expanded','false');toggle.setAttribute('aria-label','Open live chat')}};
   new MutationObserver(closeForBooking).observe(modal,{attributes:true,attributeFilter:['hidden']});closeForBooking();
   const fitViewport=()=>{const vv=window.visualViewport;if(vv){widget.style.setProperty('--am-chat-vh',vv.height+'px');widget.style.setProperty('--am-chat-keyboard',Math.max(0,window.innerHeight-vv.height-vv.offsetTop)+'px')}};
   window.visualViewport?.addEventListener('resize',fitViewport);window.visualViewport?.addEventListener('scroll',fitViewport);fitViewport();
-  window.setInterval(poll,8000);
- document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')poll()});
+  window.setInterval(poll,5000);poll();
+ document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){updateBadge();poll()}});
 }
 const cf=$('#contact-form');if(cf){const topic=new URLSearchParams(location.search).get('topic');const subjects={dining:'Dining inquiry',event:'Event inquiry',careers:'Careers inquiry'};if(subjects[topic])cf.elements.namedItem('message').value=subjects[topic]+':\n';}if(cf)cf.addEventListener('submit',async e=>{e.preventDefault();const btn=cf.querySelector('button'),res=$('#contact-result');btn.disabled=true;try{await api('contact',Object.fromEntries(new FormData(cf)));res.textContent='Your message has been sent to the resort dashboard.';cf.reset()}catch(e){res.textContent=e.message}finally{btn.disabled=false}});
 persist();initLiveChat();load().then(syncCustomerCare).catch(()=>{});if($('#villa-catalog')||$('#event-catalog')||$('#dining-catalog')){load().then(renderAll);}if(document.body.dataset.openBooking)beginBooking();else if(document.body.dataset.openCheckout)renderCart();
