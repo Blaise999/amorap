@@ -21,6 +21,8 @@ jobs:
         run: node --check public/assets/site.js && node --check public/assets/admin.js
       - name: Admin and guest receipt API
         run: python tests/qa_admin.py
+      - name: Admin-configured additional guest pricing
+        run: python tests/qa_extra_guest.py
       - name: Date-scoped remaining room inventory
         run: python tests/qa_room_availability.py
       - name: Live chat security, support and admin replies

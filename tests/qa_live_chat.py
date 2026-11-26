@@ -19,6 +19,8 @@ with tempfile.TemporaryDirectory() as tmp:
   first=guest.send('POST','/api/chat/start',{'name':'QA Visitor','email':'guest@example.test','message':'Can I bring a dog?'},201)
   token=first['token'];cid=first['chat']['id']
   assert len(token)==43 and first['chat']['messages'][0]['text']=='Can I bring a dog?'
+  stranger.send('POST','/api/chat/poll',{'id':cid},expected=404)
+  stranger.send('POST','/api/chat/send',{'id':cid,'token':None,'message':'Intruder'},expected=404)
   stranger.send('POST','/api/chat/poll',{'id':cid,'token':'wrong'},expected=404)
   stranger.send('POST','/api/chat/send',{'id':cid,'token':'wrong','message':'Intruder'},expected=404)
   stranger.send('POST','/api/chat/poll',{'id':cid+1,'token':token},expected=404)

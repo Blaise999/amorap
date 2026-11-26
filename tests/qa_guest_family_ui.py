@@ -7,7 +7,7 @@ seed=json.loads((root/'seed.json').read_text())
 catalog={**seed,'rooms':[{**r,'reviewed':True,'bookable':True,'active':True} for r in seed['rooms']],
  'addons':[],'services':[],'paymentReady':True,'paymentMethods':['bank','gcash'],
  'support':{'phone':'+63 912 345 6789','dialPhone':'+639123456789','email':'care@example.test','resortAddress':'QA Resort Road','officeAddress':'QA Main Office','hours':'Mon-Sun 8am-8pm','greeting':'How may we help?'}}
-catalog['rooms'][0].update(petsAllowed=True,maxPets=2,petFee=35000,petPolicy='House-trained pets only',inventory=3)
+catalog['rooms'][0].update(petsAllowed=True,maxPets=2,petFee=35000,petPolicy='House-trained pets only',inventory=3,capacity=8,extraGuestFee=50000)
 with sync_playwright() as p:
  chrome=(os.environ.get('QA_CHROMIUM') or ('/usr/bin/chromium' if Path('/usr/bin/chromium').is_file() else None))
  browser=p.chromium.launch(executable_path=chrome,headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
@@ -49,15 +49,22 @@ with sync_playwright() as p:
  expect(contact.locator('[data-support-address]')).to_have_text('QA Resort Road')
  expect(contact.locator('[data-support-office]')).to_have_text('QA Main Office')
  expect(contact.locator('[data-support-email]')).to_contain_text('care@example.test')
+ contact.set_viewport_size({'width':390,'height':650})
  contact.get_by_role('button',name='Open live chat').click()
  expect(contact.locator('.am-chat-panel')).to_be_visible()
+ bounds=contact.locator('.am-chat-panel').bounding_box()
+ assert bounds['x']>=0 and bounds['y']>=0 and bounds['x']+bounds['width']<=390 and bounds['y']+bounds['height']<=650
+ contact.locator('.am-chat-identity summary').click()
  contact.locator('.am-chat-panel [name=name]').fill('QA chatter')
  contact.locator('.am-chat-panel [name=message]').fill('Can you help?')
  contact.locator('.am-chat-panel').get_by_role('button',name='Send message').click()
  expect(contact.locator('.am-chat-message.is-guest')).to_contain_text('Can you help?')
  contact.get_by_role('button',name='Close chat').click()
+ expect(contact.locator('.am-chat-badge')).to_have_text('1',timeout=12000)
+ expect(contact.locator('.am-chat-badge')).to_be_visible()
  contact.get_by_role('button',name='Open live chat').click()
  expect(contact.locator('.am-chat-message.is-staff')).to_contain_text('Hello from AMORAP staff')
+ expect(contact.locator('.am-chat-badge')).to_be_hidden()
  contact.get_by_role('button',name='Close chat').click()
  contact.locator('#contact-form [name=name]').fill('QA Guest')
  contact.locator('#contact-form [name=email]').fill('guest@example.test')
@@ -81,6 +88,15 @@ with sync_playwright() as p:
  expect(booking.locator('#am-stay-form [name=qty]')).to_have_attribute('max','3')
  expect(booking.locator('#am-stay-form [name=kids]')).to_have_attribute('max','2')
  expect(booking.locator('#am-stay-form [name=pets]')).to_have_attribute('max','2')
+ expect(booking.locator('#am-stay-form [name=guests]')).to_have_attribute('max','8')
+ booking.locator('#am-stay-form [name=guests]').fill('5')
+ before=booking.locator('#am-estimate').inner_text()
+ booking.get_by_role('button',name='Add one guest').click()
+ expect(booking.locator('#am-stay-form [name=guests]')).to_have_value('6')
+ expect(booking.locator('#am-extra-guest-estimate')).to_contain_text('1 additional guest')
+ assert booking.locator('#am-estimate').inner_text()!=before
+ booking.get_by_role('button',name='Remove one guest').click()
+ assert booking.locator('#am-estimate').inner_text()==before
  booking.locator('#am-stay-form [name=qty]').fill('2')
  expect(booking.locator('#am-stay-form [name=kids]')).to_have_attribute('max','4')
  expect(booking.locator('#am-stay-form [name=pets]')).to_have_attribute('max','4')
