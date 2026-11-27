@@ -128,8 +128,17 @@ def family_rules(r):
   'petPolicy':r.get('petPolicy','')
  }
 
+def extra_guest_limit(r):
+ # Preserve existing larger capacities; old rooms with a configured surcharge
+ # but no separate limit allow three additional guests until staff edit it.
+ capacity=integer(r['capacity'],0,100)
+ default=max(0,capacity-5) if capacity>5 else (3 if r.get('extraGuestFee',0)>0 else 0)
+ return integer(r.get('maxExtraGuests',default),0,100)
+
 def guest_room_policies(r):
- return {**r,**family_rules(r),'includedGuests':min(5,r['capacity']),'extraGuestFee':r.get('extraGuestFee',0)}
+ included=min(5,r['capacity'])
+ extra=extra_guest_limit(r)
+ return {**r,**family_rules(r),'capacity':included+extra if r.get('extraGuestFee',0)>0 else included,'includedGuests':included,'maxExtraGuests':extra,'extraGuestFee':r.get('extraGuestFee',0)}
 
 def payment_methods(p):
  """Configured manual-payment choices; never trust a browser-selected account."""
@@ -291,7 +300,7 @@ def quote(c,v):
   if not isinstance(item,dict):raise APIError('Invalid villa selection.')
   rid=ident(item.get('id'));r=rooms.get(rid)
   if rid in seen or not r or not enabled(r):raise APIError('A selected villa is not currently bookable.')
-  seen.add(rid);qty=integer(item.get('qty'),1,30);guests=integer(item.get('guests'),1,r['capacity']*qty)
+  seen.add(rid);qty=integer(item.get('qty'),1,30);guests=integer(item.get('guests'),1,(min(5,r['capacity'])+extra_guest_limit(r))*qty)
   family=family_rules(r)
   kids=integer(item.get('kids',0),0,integer(family['maxKids'],0,30)*qty)
   pets=integer(item.get('pets',0),0,30*qty)
@@ -363,7 +372,7 @@ def validate_rooms(c,rows):
   imgs=validate_photo_urls(c,imgs,existing_images=previous.get(rid,()))
   family=family_rules(r)
   family={'bedrooms':integer(family['bedrooms'],1,20),'freeChildUnderAge':integer(family['freeChildUnderAge'],0,18),'maxKids':integer(family['maxKids'],0,30),'petsAllowed':family['petsAllowed'],'maxPets':integer(family['maxPets'],0,30),'petFee':amount(family['petFee']) or 0,'petPolicy':clean(family['petPolicy'],1000)}
-  result.append({**family,'extraGuestFee':amount(r.get('extraGuestFee',0)) or 0,'id':rid,'name':clean(r.get('name'),120,True),'category':clean(r.get('category',''),100),'description':clean(r.get('description',''),3000),'price':amount(r.get('price')),'capacity':integer(r.get('capacity'),0,100),'inventory':integer(r.get('inventory'),0,1000),'bed':clean(r.get('bed',''),200),'size':clean(r.get('size',''),100),'policy':clean(r.get('policy',''),2000),'amenities':[clean(x,150,True) for x in amen],'images':imgs,'active':r.get('active') is True,'reviewed':r.get('reviewed',True) is True})
+  result.append({**family,**({'maxExtraGuests':integer(r['maxExtraGuests'],0,100)} if 'maxExtraGuests' in r else {}),'extraGuestFee':amount(r.get('extraGuestFee',0)) or 0,'id':rid,'name':clean(r.get('name'),120,True),'category':clean(r.get('category',''),100),'description':clean(r.get('description',''),3000),'price':amount(r.get('price')),'capacity':integer(r.get('capacity'),0,100),'inventory':integer(r.get('inventory'),0,1000),'bed':clean(r.get('bed',''),200),'size':clean(r.get('size',''),100),'policy':clean(r.get('policy',''),2000),'amenities':[clean(x,150,True) for x in amen],'images':imgs,'active':r.get('active') is True,'reviewed':r.get('reviewed',True) is True})
  return result
 
 def validate_addons(rows):
