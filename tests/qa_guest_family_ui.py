@@ -7,7 +7,7 @@ seed=json.loads((root/'seed.json').read_text())
 catalog={**seed,'rooms':[{**r,'reviewed':True,'bookable':True,'active':True} for r in seed['rooms']],
  'addons':[],'services':[],'paymentReady':True,'paymentMethods':['bank','gcash'],
  'support':{'phone':'+63 912 345 6789','dialPhone':'+639123456789','email':'care@example.test','resortAddress':'QA Resort Road','officeAddress':'QA Main Office','hours':'Mon-Sun 8am-8pm','greeting':'How may we help?'}}
-catalog['rooms'][0].update(petsAllowed=True,maxPets=2,petFee=35000,petPolicy='House-trained pets only',inventory=3,capacity=8,extraGuestFee=50000)
+catalog['rooms'][0].update(petsAllowed=True,maxPets=2,petFee=35000,petPolicy='House-trained pets only',inventory=3,capacity=3,maxExtraGuests=3,extraGuestFee=50000)
 with sync_playwright() as p:
  chrome=(os.environ.get('QA_CHROMIUM') or ('/usr/bin/chromium' if Path('/usr/bin/chromium').is_file() else None))
  browser=p.chromium.launch(executable_path=chrome,headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
@@ -88,14 +88,14 @@ with sync_playwright() as p:
  expect(booking.locator('#am-stay-form [name=qty]')).to_have_attribute('max','3')
  expect(booking.locator('#am-stay-form [name=kids]')).to_have_attribute('max','2')
  expect(booking.locator('#am-stay-form [name=pets]')).to_have_attribute('max','2')
- expect(booking.locator('#am-stay-form [name=guests]')).to_have_attribute('max','8')
- booking.locator('#am-stay-form [name=guests]').fill('5')
+ expect(booking.locator('#am-stay-form [name=guests]')).to_have_attribute('max','3')
+ expect(booking.locator('#am-stay-form [name=extraGuests]')).to_have_attribute('max','3')
+ booking.locator('#am-stay-form [name=guests]').fill('3')
  before=booking.locator('#am-estimate').inner_text()
- booking.get_by_role('button',name='Add one guest').click()
- expect(booking.locator('#am-stay-form [name=guests]')).to_have_value('6')
- expect(booking.locator('#am-extra-guest-estimate')).to_contain_text('1 additional guest')
+ booking.locator('#am-stay-form [name=extraGuests]').fill('2')
+ expect(booking.locator('#am-extra-guest-estimate')).to_contain_text('2 additional guest')
  assert booking.locator('#am-estimate').inner_text()!=before
- booking.get_by_role('button',name='Remove one guest').click()
+ booking.locator('#am-stay-form [name=extraGuests]').fill('0')
  assert booking.locator('#am-estimate').inner_text()==before
  booking.locator('#am-stay-form [name=qty]').fill('2')
  expect(booking.locator('#am-stay-form [name=kids]')).to_have_attribute('max','4')

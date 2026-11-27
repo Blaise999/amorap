@@ -32,6 +32,17 @@ with tempfile.TemporaryDirectory() as tmp:
   d=admin.get();rooms=d['rooms'];rooms[0]['extraGuestFee']=0
   admin.save('rooms',{'items':rooms},d['revisions']['rooms'])
   quote(6,expected=409)
-  print('PASS extra guest fees, five included, two villas, server-authoritative rate and capacity')
+  d=admin.get();rooms=d['rooms'];rooms[0].update(capacity=3,extraGuestFee=100000,petsAllowed=True,maxPets=3,petFee=25000)
+  admin.save('rooms',{'items':rooms},d['revisions']['rooms'])
+  public=guest.send('GET','/api/catalog')['rooms'][0]
+  assert public['includedGuests']==3 and public['maxExtraGuests']==3 and public['capacity']==6
+  assert quote(5)['total']==1400000
+  d=admin.get();rooms=d['rooms'];rooms[0]['maxExtraGuests']=2
+  admin.save('rooms',{'items':rooms},d['revisions']['rooms'])
+  assert quote(5)['total']==1400000
+  quote(6,expected=400)
+  combined=guest.send('POST','/api/quote',{'checkin':start.isoformat(),'checkout':end.isoformat(),'rooms':[{'id':r['id'],'qty':1,'guests':5,'pets':2}],'addons':[],'services':[]},200)
+  assert combined['total']==1450000 and combined['rooms'][0]['petTotal']==50000
+  print('PASS extra guests, three included, independent limits, pets and server-authoritative pricing')
  finally:
   web.shutdown();web.server_close()
